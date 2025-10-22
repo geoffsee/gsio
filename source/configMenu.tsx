@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {Box, Text, Newline, useApp, useInput} from 'ink';
 import {loadConfig, saveConfig, type AppConfig} from './config.js';
 
-type Mode = 'browse' | 'editAllow' | 'editBehavior' | 'message';
+type Mode = 'browse' | 'editAllow' | 'editBehavior' | 'editModel' | 'editBaseUrl' | 'editWhisperCmd' | 'editWhisperModel' | 'message';
 
 export const ConfigMenu = () => {
   const {exit} = useApp();
@@ -29,7 +29,7 @@ export const ConfigMenu = () => {
       if (key.return || key.escape) exit();
       return;
     }
-    if (mode === 'editAllow' || mode === 'editBehavior') {
+    if (mode === 'editAllow' || mode === 'editBehavior' || mode === 'editModel' || mode === 'editBaseUrl' || mode === 'editWhisperCmd' || mode === 'editWhisperModel') {
       if (key.return) {
         const val = input.trim();
         setInput('');
@@ -40,6 +40,18 @@ export const ConfigMenu = () => {
             setCfg(next);
           } else if (mode === 'editBehavior') {
             const next = {...cfg, linger: {...cfg.linger, behavior: val}};
+            setCfg(next);
+          } else if (mode === 'editModel') {
+            const next = {...cfg, ai: {...cfg.ai, model: val}};
+            setCfg(next);
+          } else if (mode === 'editBaseUrl') {
+            const next = {...cfg, ai: {...cfg.ai, baseUrl: val}};
+            setCfg(next);
+          } else if (mode === 'editWhisperCmd') {
+            const next = {...cfg, audio: {...cfg.audio, whisper: {...cfg.audio.whisper, command: val}}};
+            setCfg(next);
+          } else if (mode === 'editWhisperModel') {
+            const next = {...cfg, audio: {...cfg.audio, whisper: {...cfg.audio.whisper, model: val}}};
             setCfg(next);
           }
         }
@@ -142,6 +154,30 @@ export const ConfigMenu = () => {
           {renderItem(it)}
         </Text>
       ))}
+      {mode === 'editWhisperCmd' && (
+        <>
+          <Newline />
+          <Text color="yellow">Whisper command (in PATH): {input}_</Text>
+        </>
+      )}
+      {mode === 'editWhisperModel' && (
+        <>
+          <Newline />
+          <Text color="yellow">Whisper model path (.bin): {input}_</Text>
+        </>
+      )}
+      {mode === 'editModel' && (
+        <>
+          <Newline />
+          <Text color="yellow">Edit AI model: {input}_</Text>
+        </>
+      )}
+      {mode === 'editBaseUrl' && (
+        <>
+          <Newline />
+          <Text color="yellow">Edit AI base URL: {input}_</Text>
+        </>
+      )}
       {mode === 'editAllow' && (
         <>
           <Newline />
@@ -165,6 +201,24 @@ export const ConfigMenu = () => {
 
   function buildItems(c: AppConfig) {
     const out: any[] = [];
+    out.push({
+      key: 'ai.provider',
+      label: `AI provider: ${c.ai.provider}`,
+      toggle: () => setCfg({...c, ai: {...c.ai, provider: c.ai.provider === 'openai' ? 'ollama' : 'openai'}}),
+      kind: 'toggle',
+    });
+    out.push({
+      key: 'ai.model',
+      label: `AI model: ${c.ai.model}`,
+      action: () => { setMode('editModel'); setInput(c.ai.model); },
+      kind: 'action',
+    });
+    out.push({
+      key: 'ai.baseUrl',
+      label: `AI base URL: ${c.ai.baseUrl || '(default)'}`,
+      action: () => { setMode('editBaseUrl'); setInput(c.ai.baseUrl || (c.ai.provider === 'ollama' ? 'http://localhost:11434/v1' : '')); },
+      kind: 'action',
+    });
     out.push({
       key: 'dangerous',
       label: 'Shell: allow dangerous commands',
@@ -199,6 +253,26 @@ export const ConfigMenu = () => {
       toggle: () => setCfg({...c, audio: {...c.audio, captureEnabled: !c.audio.captureEnabled}}),
       kind: 'toggle',
     });
+    out.push({
+      key: 'audio.stt',
+      label: `Audio STT provider: ${c.audio.sttProvider}`,
+      toggle: () => setCfg({...c, audio: {...c.audio, sttProvider: c.audio.sttProvider === 'openai' ? 'whisper' : 'openai'}}),
+      kind: 'toggle',
+    });
+    if (c.audio.sttProvider === 'whisper') {
+      out.push({
+        key: 'audio.whisper.cmd',
+        label: `Whisper command: ${c.audio.whisper.command || '(set)'}`,
+        action: () => { setMode('editWhisperCmd'); setInput(c.audio.whisper.command || 'whisper-cpp'); },
+        kind: 'action',
+      });
+      out.push({
+        key: 'audio.whisper.model',
+        label: `Whisper model: ${c.audio.whisper.model || '(set path to .bin)'}`,
+        action: () => { setMode('editWhisperModel'); setInput(c.audio.whisper.model || ''); },
+        kind: 'action',
+      });
+    }
     out.push({
       key: 'panel.completed',
       label: 'TODO panel: show completed tasks',

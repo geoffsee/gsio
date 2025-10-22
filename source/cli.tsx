@@ -5,6 +5,7 @@ import meow from 'meow';
 import App from './app.js';
 import {Chat} from './chat.js';
 import {ConfigMenu} from './configMenu.js';
+import {configureLLM} from './llm.js';
 
 const cli = meow(
 	`
@@ -41,13 +42,15 @@ const cli = meow(
 
 const subcommand = cli.input[0];
 
+await configureLLM();
+
 render(
-	<>
-		{subcommand === 'config' ? (
-			<ConfigMenu />
-		) : (
-			<Chat debug={Boolean(cli.flags.debug)} />
-		)}
-		<App name={cli.flags.name} />
-	</>,
+  <>
+    {subcommand === 'config' ? (
+      <ConfigMenu />
+    ) : (
+      <Chat debug={Boolean(cli.flags.debug)} />
+    )}
+    <App name={cli.flags.name} />
+  </>,
 );
