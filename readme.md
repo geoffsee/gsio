@@ -18,7 +18,7 @@ $ gsio-ai --help
     Start an interactive AI chat in your terminal. Type your message and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET, todo management, shell_exec).
 
   Environment
-    Requires OPENAI_API_KEY to be set in your environment.
+    Defaults to OpenAI. Can be switched to Ollama (offline) via config.
 
   Options
     --name  Optional greeting name (shown at the top)
@@ -40,6 +40,8 @@ $ gsio-ai --help
 - Optional audio context with continuous capture + VAD + transcription + rolling summary.
 - Linger mode for autonomous actions based on recent audio context and your behavior directive.
 
+Note: Audio transcription currently requires OpenAI; Ollama mode disables transcription.
+
 ## Key Bindings
 
 - Enter: send message
@@ -55,6 +57,10 @@ Run `gsio-ai config` to open the interactive menu.
 - Shell
   - Allow dangerous commands: off by default; when off, `shell_exec` only runs an allowlist of read‑only commands.
   - Extra allowlist: add additional safe commands for `shell_exec`.
+- AI
+  - Provider: switch between `openai` and `ollama` (offline).
+  - Model: set the model name (e.g., `gpt-4o-mini` or `llama3.1:8b`).
+  - Base URL: override API base; for Ollama use `http://localhost:11434/v1`.
 - TODO Panel
   - Show completed: include done items in the panel.
   - Max items: number of TODOs to show.
@@ -66,6 +72,19 @@ Run `gsio-ai config` to open the interactive menu.
   - Linger interval (sec): cooldown between autonomous runs.
 
 Config is stored in `.gsio-config.json` in the current working directory.
+
+### Offline with Ollama
+
+1. Install Ollama and pull a model, e.g.: `ollama pull llama3.1:8b`.
+2. Run `gsio-ai config` and set:
+   - AI provider: `ollama`
+   - AI model: `llama3.1:8b` (or your choice)
+   - AI base URL: `http://localhost:11434/v1`
+3. Start `gsio-ai` — chat and tools run locally via Ollama.
+
+Tips:
+- If using an OpenAI‑compatible proxy for Ollama, the defaults above should work.
+- Function/tool calling support depends on the model/server; general chat works regardless.
 
 ## Tools Overview
 
@@ -96,3 +115,19 @@ Notes:
 Example behavior directive:
 
 "When I mention meetings, capture action items as TODOs (P2); if I say 'urgent', make them P1; set focus to the next actionable task and mark completed when I say it's done. Keep responses minimal."
+
+### Offline Transcription with Whisper
+
+You can transcribe audio locally using Whisper (no network).
+
+- Install a Whisper CLI (e.g., whisper.cpp) and download a model, e.g.: `ggml-base.en.bin`.
+- Run `gsio-ai config` and set under Audio:
+  - Audio STT provider: `whisper`
+  - Whisper command: name or path of your Whisper binary (e.g., `whisper-cpp` or `./main`). Ensure it’s on your PATH.
+  - Whisper model: full path to your `.bin` model file.
+- Start `gsio-ai` and toggle audio (Alt+A).
+
+Notes:
+- The app invokes Whisper like: `whisper-cpp -m <model.bin> -f <wav> -otxt -of <tmpPrefix> [-l en]` and reads `<tmpPrefix>.txt`.
+- Customize extra flags by editing `.gsio-config.json` (`audio.whisper.extraArgs`).
+- If you prefer an OpenAI‑compatible HTTP polyfill for `/v1/audio/transcriptions`, we can add a small local server that shells out to Whisper on request. Ask and I’ll wire it up.

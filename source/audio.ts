@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import OpenAI from 'openai';
+import {loadConfig} from './config.js';
 
 type Callbacks = {
   onTranscript: (text: string) => void;
@@ -119,7 +120,7 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
   const frameBytes = vad.getFrameSamples() * 2;
   let segStartMs = 0;
 
-  const client = new OpenAI();
+  // Create client lazily in transcribeSegment; also allow disabling for unsupported providers
 
   function appendPCM(buf: Buffer) {
     // merge into pcmBuffer
@@ -160,20 +161,75 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
 
   async function transcribeSegment(int16: Int16Array) {
     const wav = pcmToWav(int16, sampleRate);
-    const tmp = path.join(os.tmpdir(), `gsio-cap-${Date.now()}.wav`);
-    await fs.writeFile(tmp, wav);
+    const tmpWav = path.join(os.tmpdir(), `gsio-cap-${Date.now()}.wav`);
+    await fs.writeFile(tmpWav, wav);
     onStatus?.('Transcribing audio…');
     try {
+      const cfg = await loadConfig();
+      if (cfg.audio?.sttProvider === 'whisper') {
+        const text = await transcribeWithLocalWhisper(tmpWav, cfg.audio.whisper.command, cfg.audio.whisper.model, cfg.audio.whisper.language, cfg.audio.whisper.extraArgs || []);
+        if (text.trim().length > 0) onTranscript(text.trim());
+        return;
+      }
+      // Default to OpenAI transcription
+      const client = new OpenAI();
       const resp = await client.audio.transcriptions.create({
-        file: (await import('node:fs')).createReadStream(tmp) as any,
+        file: (await import('node:fs')).createReadStream(tmpWav) as any,
         model: 'gpt-4o-transcribe',
       } as any);
       const text = (resp as any).text || '';
       if (text.trim().length > 0) onTranscript(text.trim());
+    } catch (e: any) {
+      onError?.(String(e?.message || e));
     } finally {
       // cleanup
-      fs.unlink(tmp).catch(() => {});
+      fs.unlink(tmpWav).catch(() => {});
     }
+  }
+
+  async function transcribeWithLocalWhisper(wavPath: string, cmd: string, modelPath: string, language?: string, extraArgs: string[] = []): Promise<string> {
+    return await new Promise<string>((resolve) => {
+      if (!cmd || !modelPath) {
+        onError?.('Whisper command/model not configured. Use `gsio-ai config` to set them.');
+        return resolve('');
+      }
+      const outPrefix = path.join(os.tmpdir(), `gsio-whisper-${Date.now()}`);
+      const args = [
+        '-m', modelPath,
+        '-f', wavPath,
+        '-otxt',
+        '-of', outPrefix,
+      ];
+      if (language) {
+        args.push('-l', language);
+      }
+      if (Array.isArray(extraArgs) && extraArgs.length > 0) {
+        args.push(...extraArgs);
+      }
+      const child = spawn(cmd, args);
+      let stderr = '';
+      child.stderr.on('data', (buf) => { stderr += String(buf || ''); });
+      child.on('error', (err) => {
+        onError?.(`Failed to start Whisper: ${err?.message || err}`);
+        resolve('');
+      });
+      child.on('close', async (code) => {
+        if (code !== 0) {
+          onError?.(`Whisper exited with code ${code}${stderr ? `: ${stderr}` : ''}`);
+          return resolve('');
+        }
+        try {
+          const outTxt = await fs.readFile(`${outPrefix}.txt`, 'utf8');
+          resolve(outTxt || '');
+        } catch (e: any) {
+          onError?.(`Failed reading Whisper output: ${e?.message || e}`);
+          resolve('');
+        } finally {
+          // Cleanup generated files
+          fs.unlink(`${outPrefix}.txt`).catch(() => {});
+        }
+      });
+    });
   }
 
   function start() {

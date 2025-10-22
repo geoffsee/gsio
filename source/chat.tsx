@@ -319,16 +319,17 @@ export const Chat = ({debug = false}: ChatProps) => {
 			// Iterate through streaming events to collect text in realtime
 			let fullResponse = '';
 			for await (const event of stream) {
-				// Stream model text deltas
-				if (
-					event.type === 'raw_model_stream_event' &&
-					event.data.type === 'output_text_delta'
-				) {
+				// Stream model text deltas (Responses API wrapped) or direct deltas (Chat Completions adapter)
+				if (event.type === 'raw_model_stream_event' && event.data?.type === 'output_text_delta') {
 					const delta = event.data.delta;
 					if (delta) {
 						fullResponse += delta;
 						setResponse(fullResponse);
 					}
+				} else if ((event as any).type === 'output_text_delta' && (event as any).delta) {
+					const delta = (event as any).delta as string;
+					fullResponse += delta;
+					setResponse(fullResponse);
 				}
 			}
 
@@ -418,12 +419,16 @@ export const Chat = ({debug = false}: ChatProps) => {
       const stream: StreamedRunResult<any, any> = await run(agent, instruction, { stream: true });
       let full = '';
       for await (const event of stream) {
-        if (event.type === 'raw_model_stream_event' && event.data.type === 'output_text_delta') {
+        if (event.type === 'raw_model_stream_event' && event.data?.type === 'output_text_delta') {
           const d = event.data.delta;
           if (d) {
             full += d;
             setResponse(full);
           }
+        } else if ((event as any).type === 'output_text_delta' && (event as any).delta) {
+          const d = (event as any).delta as string;
+          full += d;
+          setResponse(full);
         }
       }
       // append assistant output

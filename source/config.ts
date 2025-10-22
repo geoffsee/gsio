@@ -2,6 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export type AppConfig = {
+  ai: {
+    provider: 'openai' | 'ollama';
+    model: string; // default model to use for chat/summarization
+    baseUrl?: string; // override API base (e.g., http://localhost:11434/v1 for Ollama)
+    apiKey?: string; // optional override; for Ollama, can be any non-empty string
+  };
   shell: {
     allowDangerous: boolean;
     extraAllowlist: string[];
@@ -12,6 +18,13 @@ export type AppConfig = {
   };
   audio: {
     captureEnabled: boolean;
+    sttProvider: 'openai' | 'whisper';
+    whisper: {
+      command: string; // e.g., 'whisper-cpp' or './main'
+      model: string;   // path to ggml model file, e.g., '~/models/ggml-base.en.bin'
+      language?: string; // optional language code, e.g., 'en'
+      extraArgs?: string[]; // optional extra CLI args
+    };
   };
   linger: {
     enabled: boolean;
@@ -21,9 +34,19 @@ export type AppConfig = {
 };
 
 const DEFAULT_CONFIG: AppConfig = {
+  ai: { provider: 'openai', model: 'gpt-4o-mini', baseUrl: '', apiKey: '' },
   shell: { allowDangerous: false, extraAllowlist: [] },
   panel: { todoShowCompleted: true, maxItems: 5 },
-  audio: { captureEnabled: false },
+  audio: {
+    captureEnabled: false,
+    sttProvider: 'openai',
+    whisper: {
+      command: 'whisper-cpp',
+      model: '',
+      language: 'en',
+      extraArgs: [],
+    },
+  },
   linger: {
     enabled: false,
     behavior:
@@ -60,6 +83,17 @@ export async function saveConfig(cfg: AppConfig): Promise<void> {
 
 function normalizeConfig(input: any): AppConfig {
   const cfg: AppConfig = {
+    ai: {
+      provider: input?.ai?.provider === 'ollama' ? 'ollama' : 'openai',
+      model:
+        typeof input?.ai?.model === 'string' && input.ai.model.trim().length > 0
+          ? String(input.ai.model)
+          : (input?.ai?.provider === 'ollama' ? 'llama3.1:8b' : DEFAULT_CONFIG.ai.model),
+      baseUrl:
+        typeof input?.ai?.baseUrl === 'string' ? input.ai.baseUrl : DEFAULT_CONFIG.ai.baseUrl,
+      apiKey:
+        typeof input?.ai?.apiKey === 'string' ? input.ai.apiKey : DEFAULT_CONFIG.ai.apiKey,
+    },
     shell: {
       allowDangerous: !!input?.shell?.allowDangerous,
       extraAllowlist: Array.isArray(input?.shell?.extraAllowlist)
@@ -72,6 +106,19 @@ function normalizeConfig(input: any): AppConfig {
     },
     audio: {
       captureEnabled: !!input?.audio?.captureEnabled,
+      sttProvider: input?.audio?.sttProvider === 'whisper' ? 'whisper' : 'openai',
+      whisper: {
+        command: typeof input?.audio?.whisper?.command === 'string' && input.audio.whisper.command.trim().length > 0
+          ? String(input.audio.whisper.command)
+          : DEFAULT_CONFIG.audio.whisper.command,
+        model: typeof input?.audio?.whisper?.model === 'string' ? String(input.audio.whisper.model) : DEFAULT_CONFIG.audio.whisper.model,
+        language: typeof input?.audio?.whisper?.language === 'string' && input.audio.whisper.language.trim().length > 0
+          ? String(input.audio.whisper.language)
+          : DEFAULT_CONFIG.audio.whisper.language,
+        extraArgs: Array.isArray(input?.audio?.whisper?.extraArgs)
+          ? input.audio.whisper.extraArgs.filter((s: any) => typeof s === 'string')
+          : DEFAULT_CONFIG.audio.whisper.extraArgs,
+      },
     },
     linger: {
       enabled: !!input?.linger?.enabled,
