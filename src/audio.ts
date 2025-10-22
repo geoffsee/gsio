@@ -5,10 +5,28 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import {loadConfig} from './config.js';
 
+export type CaptureMetrics = {
+  startTimeMs: number;
+  lastUpdateMs: number;
+  feedActive: boolean;
+  sampleRate: number;
+  bytesReceived: number;
+  totalSamples: number;
+  framesProcessed: number;
+  vadStarts: number;
+  vadEnds: number;
+  vadActive: boolean;
+  segmentsEmitted: number;
+  lastSegmentSamples: number;
+  transcriptsEmitted: number;
+  errors: number;
+};
+
 type Callbacks = {
   onTranscript: (text: string) => void;
   onStatus?: (msg: string) => void;
   onError?: (err: string) => void;
+  onMetrics?: (m: CaptureMetrics) => void;
 };
 
 export type CaptureOptions = {
@@ -31,9 +49,9 @@ class EnergyVAD {
   constructor({
     sampleRate,
     frameMs = 20,
-    threshold = 0.015,
-    minSpeechMs = 200,
-    maxSilenceMs = 400,
+    threshold = 0.008,
+    minSpeechMs = 150,
+    maxSilenceMs = 500,
   }: { sampleRate: number; frameMs?: number; threshold?: number; minSpeechMs?: number; maxSilenceMs?: number }) {
     this.frameSamples = Math.floor((sampleRate * frameMs) / 1000);
     this.threshold = threshold;
@@ -108,7 +126,7 @@ function pcmToWav(int16: Int16Array, sampleRate: number): Buffer {
   return buffer;
 }
 
-export function startContinuousCapture({ onTranscript, onStatus, onError }: Callbacks, opts: CaptureOptions = {}) {
+export function startContinuousCapture({ onTranscript, onStatus, onError, onMetrics }: Callbacks, opts: CaptureOptions = {}) {
   const sampleRate = opts.sampleRate ?? 16000;
   const maxSegmentSec = opts.maxSegmentSec ?? 15;
   const device = process.platform === 'darwin' ? (opts.device ?? ':0') : (opts.device ?? 'default');
@@ -119,6 +137,26 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
   const vad = new EnergyVAD({ sampleRate });
   const frameBytes = vad.getFrameSamples() * 2;
   let segStartMs = 0;
+  let lastForceMs = Date.now();
+  // Rolling buffer for fallback segmentation (keep ~12s)
+  let rollingBuffer = new Int16Array(0);
+  const metrics: CaptureMetrics = {
+    startTimeMs: Date.now(),
+    lastUpdateMs: Date.now(),
+    feedActive: false,
+    sampleRate,
+    bytesReceived: 0,
+    totalSamples: 0,
+    framesProcessed: 0,
+    vadStarts: 0,
+    vadEnds: 0,
+    vadActive: false,
+    segmentsEmitted: 0,
+    lastSegmentSamples: 0,
+    transcriptsEmitted: 0,
+    errors: 0,
+  };
+  let metricsTimer: NodeJS.Timeout | null = null;
 
   // Create client lazily in transcribeSegment; also allow disabling for unsupported providers
 
@@ -129,6 +167,20 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
     merged.set(pcmBuffer, 0);
     merged.set(chunk, pcmBuffer.length);
     pcmBuffer = merged;
+    metrics.bytesReceived += buf.byteLength;
+    metrics.totalSamples += chunk.length;
+
+    // Maintain rolling buffer capped to ~12s
+    const maxRolling = sampleRate * 12;
+    if (rollingBuffer.length === 0) {
+      rollingBuffer = chunk.slice();
+    } else {
+      const keep = Math.max(0, Math.min(rollingBuffer.length, maxRolling - chunk.length));
+      const head = keep > 0 ? rollingBuffer.slice(rollingBuffer.length - keep) : new Int16Array(0);
+      rollingBuffer = new Int16Array(head.length + chunk.length);
+      rollingBuffer.set(head, 0);
+      rollingBuffer.set(chunk, head.length);
+    }
   }
 
   async function processFrames() {
@@ -138,8 +190,11 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
       const frame = new Int16Array(pcmBuffer.buffer, pcmBuffer.byteOffset + offsetBytes, frameBytes / 2);
       offsetBytes += frameBytes;
       const state = vad.feed(frame);
+      metrics.framesProcessed++;
       if (state === 'start') {
         segStartMs = now;
+        metrics.vadStarts++;
+        metrics.vadActive = true;
       }
       if (state === 'end' || (segStartMs && now - segStartMs > maxSegmentSec * 1000)) {
         // Emit segment: from start to current offset
@@ -149,13 +204,37 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
         pcmBuffer = pcmBuffer.slice(endIndex);
         segStartMs = 0;
         if (segment.length > sampleRate * 0.2) {
+          metrics.segmentsEmitted++;
+          metrics.lastSegmentSamples = segment.length;
           void transcribeSegment(segment).catch((e) => onError?.(String(e?.message || e)));
+        }
+        if (state === 'end') {
+          metrics.vadEnds++;
+          metrics.vadActive = false;
         }
       }
     }
     // drop consumed bytes
     if (offsetBytes > 0) {
       pcmBuffer = new Int16Array(pcmBuffer.buffer.slice(pcmBuffer.byteOffset + offsetBytes, pcmBuffer.byteOffset + pcmBuffer.length * 2));
+    }
+
+    // Fallback segmentation: if VAD never triggered, but we have a lot of audio buffered,
+    // force a segment every ~6s to attempt transcription.
+    if (!segStartMs) {
+      const now2 = Date.now();
+      const forceIntervalMs = 6000;
+      const minSegmentSec = 4; // minimum forced segment length in seconds
+      if (now2 - lastForceMs >= forceIntervalMs && rollingBuffer.length >= sampleRate * minSegmentSec) {
+        const forceLen = Math.min(rollingBuffer.length, sampleRate * 8); // cap to last 8s
+        const segment = rollingBuffer.slice(rollingBuffer.length - forceLen);
+        rollingBuffer = new Int16Array(0);
+        lastForceMs = now2;
+        onStatus?.('No speech detected; forcing segment');
+        metrics.segmentsEmitted++;
+        metrics.lastSegmentSamples = segment.length;
+        void transcribeSegment(segment).catch((e) => onError?.(String(e?.message || e)));
+      }
     }
   }
 
@@ -168,7 +247,13 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
       const cfg = await loadConfig();
       if (cfg.audio?.sttProvider === 'whisper') {
         const text = await transcribeWithLocalWhisper(tmpWav, cfg.audio.whisper.command, cfg.audio.whisper.model, cfg.audio.whisper.language, cfg.audio.whisper.extraArgs || []);
-        if (text.trim().length > 0) onTranscript(text.trim());
+        if (text.trim().length > 0) {
+          metrics.transcriptsEmitted++;
+          onTranscript(text.trim());
+          onStatus?.(`Transcribed (${text.trim().length} chars)`);
+        } else {
+          onStatus?.('Transcribed (empty)');
+        }
         return;
       }
       // Default to OpenAI transcription
@@ -178,8 +263,15 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
         model: 'gpt-4o-transcribe',
       } as any);
       const text = (resp as any).text || '';
-      if (text.trim().length > 0) onTranscript(text.trim());
+      if (text.trim().length > 0) {
+        metrics.transcriptsEmitted++;
+        onTranscript(text.trim());
+        onStatus?.(`Transcribed (${text.trim().length} chars)`);
+      } else {
+        onStatus?.('Transcribed (empty)');
+      }
     } catch (e: any) {
+      metrics.errors++;
       onError?.(String(e?.message || e));
     } finally {
       // cleanup
@@ -249,17 +341,28 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
     try {
       ff = spawn('ffmpeg', args);
     } catch (e: any) {
+      metrics.errors++;
       onError?.('ffmpeg not found. Please install ffmpeg.');
       return;
     }
     onStatus?.('Audio capture started');
+    metrics.feedActive = true;
+    metrics.lastUpdateMs = Date.now();
+    // Periodic metrics callback (3s)
+    if (metricsTimer) clearInterval(metricsTimer);
+    metricsTimer = setInterval(() => {
+      metrics.lastUpdateMs = Date.now();
+      onMetrics?.({...metrics});
+    }, 3000);
     ff.stdout.on('data', (buf: Buffer) => {
       appendPCM(buf);
       void processFrames();
     });
     ff.stderr.on('data', () => {});
-    ff.on('error', (e) => onError?.(String(e?.message || e)));
+    ff.on('error', (e) => { metrics.errors++; onError?.(String(e?.message || e)); });
     ff.on('close', () => {
+      metrics.feedActive = false;
+      if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
       if (!stopped) onStatus?.('Audio capture stopped');
     });
   }
@@ -271,5 +374,7 @@ export function startContinuousCapture({ onTranscript, onStatus, onError }: Call
     try {
       ff?.kill('SIGKILL');
     } catch {}
+    metrics.feedActive = false;
+    if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
   };
 }
