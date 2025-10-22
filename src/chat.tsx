@@ -1,10 +1,10 @@
 import React, {useState} from 'react';
-import {Box, Newline, Text, useInput} from 'ink';
+import {Box, Newline, Text, useInput, useStdout} from 'ink';
 import {Agent, run, type StreamedRunResult} from '@openai/agents';
 import {defaultTools} from './tools.js';
 import {listTodos, shortList, getFocus} from './todoStore.js';
 import {loadConfig, saveConfig} from './config.js';
-import {startContinuousCapture} from './audio.js';
+import {startContinuousCapture, type CaptureMetrics} from './audio.js';
 import {summarizeAudioContext} from './summarizer.js';
 
 // Agent instantiated inside component based on config (e.g., audio flag)
@@ -17,6 +17,16 @@ type Message = {
 type ChatProps = { debug?: boolean };
 
 export const Chat = ({debug = false}: ChatProps) => {
+  const {stdout} = useStdout();
+  const rightMargin = 2;
+  const initRightWidth = (() => {
+    const termCols = Number((stdout as any)?.columns ?? 80);
+    const halfCols = Math.max(0, Math.floor(termCols / 2));
+    return Math.max(24, Math.min(48, Math.max(10, halfCols - rightMargin)));
+  })();
+  const rightWidthRef = React.useRef<number>(initRightWidth);
+  const rightWidth = rightWidthRef.current;
+  const LOGS_HEIGHT = 12; // fixed-height logs viewport
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -32,11 +42,19 @@ export const Chat = ({debug = false}: ChatProps) => {
   const [focused, setFocused] = useState<number | null>(null);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
   const [audioSummary, setAudioSummary] = useState<string>('');
+  const [audioLogs, setAudioLogs] = useState<string[]>([]);
+  const [audioStatus, setAudioStatus] = useState<string>('idle');
+  const [audioMetrics, setAudioMetrics] = useState<CaptureMetrics | null>(null);
   const stopAudioRef = React.useRef<null | (() => void)>(null);
   const [lingerEnabled, setLingerEnabled] = useState<boolean>(false);
   const [lingerBehavior, setLingerBehavior] = useState<string>('');
   const [lingerIntervalSec, setLingerIntervalSec] = useState<number>(20);
   const lastLingerRef = React.useRef<number>(0);
+
+  const appendAudioLog = React.useCallback((msg: string) => {
+    const ts = new Date().toLocaleTimeString();
+    setAudioLogs((logs) => [...logs, `${ts} — ${msg}`].slice(-100));
+  }, []);
 
   // Build agent based on config flags
   const agent = React.useMemo(() => {
@@ -153,6 +171,8 @@ export const Chat = ({debug = false}: ChatProps) => {
             ...m,
             {role: 'assistant', content: `Audio context ${next ? 'enabled' : 'disabled'}.`},
           ]);
+          appendAudioLog(`Audio ${next ? 'enabled' : 'disabled'}`);
+          setAudioStatus(next ? 'enabled' : 'disabled');
           if (debug) setLastAction(`audio: ${next ? 'enabled' : 'disabled'}`);
         } catch (e: any) {
           setMessages((m: Message[]) => [
@@ -377,12 +397,15 @@ export const Chat = ({debug = false}: ChatProps) => {
     if (!audioEnabled) {
       stopAudioRef.current?.();
       stopAudioRef.current = null;
+      // Note: keep existing logs on disable for context
+      setAudioMetrics(null);
       return;
     }
     stopAudioRef.current?.();
     stopAudioRef.current = startContinuousCapture({
       onTranscript: async (text) => {
         setMessages((m: Message[]) => [...m, {role: 'assistant', content: `(heard) ${text}`}]);
+        appendAudioLog(`heard: ${text}`);
         try {
           const next = await summarizeAudioContext(audioSummary, text);
           setAudioSummary(next);
@@ -399,14 +422,31 @@ export const Chat = ({debug = false}: ChatProps) => {
           }
         }
       },
-      onStatus: (s) => setLastAction(`audio: ${s}`),
-      onError: (e) => setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio error: ${e}`}]),
+      onStatus: (s) => {
+        setLastAction(`audio: ${s}`);
+        appendAudioLog(s);
+        setAudioStatus(s);
+      },
+      onError: (e) => {
+        appendAudioLog(`Error: ${e}`);
+        setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio error: ${e}`}]);
+      },
+      onMetrics: (m) => setAudioMetrics(m),
     });
     return () => {
       stopAudioRef.current?.();
       stopAudioRef.current = null;
     };
   }, [audioEnabled, audioSummary]);
+
+  // Heartbeat: every 3s append current audio status to logs while enabled
+  React.useEffect(() => {
+    if (!audioEnabled) return;
+    const id = setInterval(() => {
+      appendAudioLog(audioStatus);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [audioEnabled, audioStatus, appendAudioLog]);
 
   async function runLinger(latestUtterance: string) {
     const instruction = `Linger mode is enabled. Behavior directive from user: ${lingerBehavior}\n\nRecent audio summary: ${audioSummary || '(none)'}\nLatest utterance: ${latestUtterance}\n\nDecide if any helpful action is warranted. If yes, act concisely (use tools when needed) and keep changes minimal and safe. If no action is valuable, reply briefly or remain silent.`;
@@ -443,50 +483,131 @@ export const Chat = ({debug = false}: ChatProps) => {
   const right = input.slice(cursor);
 
   return (
-    <Box flexDirection="column">
-      <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline, Alt+A: audio)</Text>
-      <Newline />
-      {todoPanel && (
-        <>
-          <Text color="gray">TODOs {focused ? `(focus: #${focused})` : ''}</Text>
-          <Text color="gray">{todoPanel}</Text>
-          <Newline />
-        </>
-      )}
-      {audioEnabled && (
-        <>
-          <Text color="gray">Audio context: enabled{audioSummary ? ' — summarized' : ''} {lingerEnabled ? '• Linger on' : ''}</Text>
-          <Newline />
-        </>
-      )}
-      {messages.map((msg, i) => (
-        <Box key={i} flexDirection="column" marginBottom={1}>
-          <Text color={msg.role === 'user' ? 'green' : 'yellow'}>
-            {msg.role === 'user' ? 'You: ' : 'AI: '}
-            {msg.content}
-          </Text>
-        </Box>
-      ))}
+    <Box flexDirection="row">
+      <Box flexDirection="column" flexGrow={1}>
+        <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline, Alt+A: audio)</Text>
+        <Newline />
+        {todoPanel && (
+          <>
+            <Text color="gray">TODOs {focused ? `(focus: #${focused})` : ''}</Text>
+            <Text color="gray">{todoPanel}</Text>
+            <Newline />
+          </>
+        )}
+        {audioEnabled && (
+          <>
+            <Text color="gray">Audio context: enabled{audioSummary ? ' — summarized' : ''} {lingerEnabled ? '• Linger on' : ''}</Text>
+            <Newline />
+          </>
+        )}
+        {messages.map((msg, i) => (
+          <Box key={i} flexDirection="column" marginBottom={1}>
+            <Text color={msg.role === 'user' ? 'green' : 'yellow'}>
+              {msg.role === 'user' ? 'You: ' : 'AI: '}
+              {msg.content}
+            </Text>
+          </Box>
+        ))}
 
-      {isStreaming && <Text color="yellow">{response}</Text>}
+        {isStreaming && <Text color="yellow">{response}</Text>}
 
-      <Newline />
-      <Text>
-        <Text color="magenta">{'>'}</Text>{' '}
-        {left}
-        <Text color="magenta">|</Text>
-        {right}
-      </Text>
+        <Newline />
+        <Text>
+          <Text color="magenta">{'>'}</Text>{' '}
+          {left}
+          <Text color="magenta">|</Text>
+          {right}
+        </Text>
 
-      {debug && (
-        <>
-          <Newline />
-          <Text color="gray">[debug] input: {lastInput}</Text>
-          <Text color="gray">[debug] flags: {lastFlags}</Text>
-          <Text color="gray">[debug] action: {lastAction}</Text>
-          <Text color="gray">[debug] cursor: {cursor}/{input.length}</Text>
-        </>
-      )}
+        {debug && (
+          <>
+            <Newline />
+            <Text color="gray">[debug] input: {lastInput}</Text>
+            <Text color="gray">[debug] flags: {lastFlags}</Text>
+            <Text color="gray">[debug] action: {lastAction}</Text>
+            <Text color="gray">[debug] cursor: {cursor}/{input.length}</Text>
+          </>
+        )}
+      </Box>
+      <Box flexDirection="column" width={rightWidth} marginLeft={rightMargin}>
+        {audioEnabled && (
+          <>
+            <Text color="gray">Audio Logs</Text>
+            <Box flexDirection="column" height={LOGS_HEIGHT} flexShrink={0}>
+              {(() => {
+                if (audioLogs.length === 0) return <Text color="gray">(no logs yet)</Text>;
+                const maxLines = LOGS_HEIGHT;
+                const omitted = Math.max(0, audioLogs.length - maxLines);
+                const visible = audioLogs.slice(-Math.max(0, maxLines - (omitted > 0 ? 1 : 0)));
+                return (
+                  <>
+                    {omitted > 0 && (
+                      <Text color="gray">… {omitted} more</Text>
+                    )}
+                    {visible.map((line, idx) => (
+                      <Text key={idx} color="gray">- {truncateForPanel(line, rightWidth)}</Text>
+                    ))}
+                  </>
+                );
+              })()}
+            </Box>
+            <Newline />
+            <Text color="gray">Metrics</Text>
+            {audioMetrics ? (
+              <>
+                <Text color="gray">- Feed: {audioMetrics.feedActive ? 'active' : 'inactive'}</Text>
+                <Text color="gray">- Sample rate: {audioMetrics.sampleRate} Hz</Text>
+                <Text color="gray">- Bytes: {formatBytes(audioMetrics.bytesReceived)}</Text>
+                <Text color="gray">- Audio: {formatSeconds(audioMetrics.totalSamples / audioMetrics.sampleRate)} processed</Text>
+                <Text color="gray">- Frames: {audioMetrics.framesProcessed}</Text>
+                <Text color="gray">- Segments: {audioMetrics.segmentsEmitted} (last {formatSeconds(audioMetrics.lastSegmentSamples / audioMetrics.sampleRate)})</Text>
+                <Text color="gray">- Transcripts: {audioMetrics.transcriptsEmitted}</Text>
+                <Text color="gray">- VAD: {audioMetrics.vadStarts} starts / {audioMetrics.vadEnds} ends ({audioMetrics.vadActive ? 'speech' : 'silence'})</Text>
+                <Text color="gray">- Errors: {audioMetrics.errors}</Text>
+              </>
+            ) : (
+              <Text color="gray">(no metrics yet)</Text>
+            )}
+            <Newline />
+          </>
+        )}
+        <Text color="gray">Tokens</Text>
+        <Text color="gray">- Input: ~{estimateTokens(input)}</Text>
+        <Text color="gray">- Messages: ~{messages.reduce((sum, m) => sum + estimateTokens(m.content), 0)}</Text>
+      </Box>
     </Box>
   );
 };
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(2)} GB`;
+}
+
+function formatSeconds(sec: number): string {
+  if (!isFinite(sec)) return '0s';
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}m ${s}s`;
+}
+
+function estimateTokens(text: string): number {
+  if (!text) return 0;
+  // rough heuristic: ~4 characters per token for English text
+  const chars = text.replace(/\s+/g, ' ').trim().length;
+  if (chars === 0) return 0;
+  return Math.max(1, Math.ceil(chars / 4));
+}
+
+function truncateForPanel(s: string, width: number): string {
+  // Reserve 2 chars for list marker and a small margin
+  const max = Math.max(5, width - 4);
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
+}

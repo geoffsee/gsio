@@ -1,0 +1,31 @@
+{
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "baseUrl": "",
+    "apiKey": ""
+  },
+  "shell": {
+    "allowDangerous": false,
+    "extraAllowlist": []
+  },
+  "panel": {
+    "todoShowCompleted": true,
+    "maxItems": 5
+  },
+  "audio": {
+    "captureEnabled": true,
+    "sttProvider": "openai",
+    "whisper": {
+      "command": "whisper-cpp",
+      "model": "",
+      "language": "en",
+      "extraArgs": []
+    }
+  },
+  "linger": {
+    "enabled": false,
+    "behavior": "When useful, infer what the user is doing from recent audio and take helpful actions: add/update TODOs, set focus/status/priority, or fetch information. Keep changes minimal and safe. Respond concisely only when it adds value.",
+    "minIntervalSec": 20
+  }
+}
