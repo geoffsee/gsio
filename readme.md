@@ -5,7 +5,7 @@
 ## Install
 
 ```bash
-$ npm install --global gsio-ai
+$ npx gsio
 ```
 
 ## CLI
