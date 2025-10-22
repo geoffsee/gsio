@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {Box, Text, Newline, useApp, useInput} from 'ink';
 import {loadConfig, saveConfig, type AppConfig} from './config.js';
 
-type Mode = 'browse' | 'editAllow' | 'message';
+type Mode = 'browse' | 'editAllow' | 'editBehavior' | 'message';
 
 export const ConfigMenu = () => {
   const {exit} = useApp();
@@ -29,14 +29,19 @@ export const ConfigMenu = () => {
       if (key.return || key.escape) exit();
       return;
     }
-    if (mode === 'editAllow') {
+    if (mode === 'editAllow' || mode === 'editBehavior') {
       if (key.return) {
         const val = input.trim();
         setInput('');
         setMode('browse');
         if (val.length > 0) {
-          const next = {...cfg, shell: {...cfg.shell, extraAllowlist: [...cfg.shell.extraAllowlist, val]}};
-          setCfg(next);
+          if (mode === 'editAllow') {
+            const next = {...cfg, shell: {...cfg.shell, extraAllowlist: [...cfg.shell.extraAllowlist, val]}};
+            setCfg(next);
+          } else if (mode === 'editBehavior') {
+            const next = {...cfg, linger: {...cfg.linger, behavior: val}};
+            setCfg(next);
+          }
         }
         return;
       }
@@ -95,6 +100,11 @@ export const ConfigMenu = () => {
       setInput('');
       return;
     }
+    if (ch === 'e' || ch === 'E') {
+      setMode('editBehavior');
+      setInput(cfg.linger.behavior);
+      return;
+    }
     if ((ch === 'd' || ch === 'D') && items[index]?.kind === 'allow') {
       const idx = (items[index] as any).idx as number;
       const next = {
@@ -124,7 +134,7 @@ export const ConfigMenu = () => {
   return (
     <Box flexDirection="column">
       <Text color="cyan">⚙️ GSIO Config</Text>
-      <Text color="gray">↑/↓ select • Space toggle • ←/→ adjust • a add allow • d delete • s save • Esc exit</Text>
+      <Text color="gray">↑/↓ select • Space toggle • ←/→ adjust • a add allow • d delete • e edit behavior • s save • Esc exit</Text>
       <Newline />
       {items.map((it, i) => (
         <Text key={`${it.key}-${i}`} color={i === index ? 'magenta' : undefined}>
@@ -136,6 +146,12 @@ export const ConfigMenu = () => {
         <>
           <Newline />
           <Text color="yellow">Add allowlist command: {input}_</Text>
+        </>
+      )}
+      {mode === 'editBehavior' && (
+        <>
+          <Newline />
+          <Text color="yellow">Edit linger behavior: {input}_</Text>
         </>
       )}
       {mode === 'message' && msg && (
@@ -154,6 +170,33 @@ export const ConfigMenu = () => {
       label: 'Shell: allow dangerous commands',
       value: c.shell.allowDangerous,
       toggle: () => setCfg({...c, shell: {...c.shell, allowDangerous: !c.shell.allowDangerous}}),
+      kind: 'toggle',
+    });
+    out.push({
+      key: 'linger.enabled',
+      label: 'Linger: run continuously on audio',
+      value: c.linger.enabled,
+      toggle: () => setCfg({...c, linger: {...c.linger, enabled: !c.linger.enabled}}),
+      kind: 'toggle',
+    });
+    out.push({
+      key: 'linger.behavior',
+      label: `Linger behavior: ${truncate(c.linger.behavior, 70)}`,
+      action: () => { setMode('editBehavior'); setInput(c.linger.behavior); },
+      kind: 'action',
+    });
+    out.push({
+      key: 'linger.interval',
+      label: `Linger interval (sec): ${c.linger.minIntervalSec}`,
+      inc: () => setCfg({...c, linger: {...c.linger, minIntervalSec: Math.min(600, c.linger.minIntervalSec + 5)}}),
+      dec: () => setCfg({...c, linger: {...c.linger, minIntervalSec: Math.max(5, c.linger.minIntervalSec - 5)}}),
+      kind: 'number',
+    });
+    out.push({
+      key: 'audio.capture',
+      label: 'Audio: capture context from system audio',
+      value: c.audio.captureEnabled,
+      toggle: () => setCfg({...c, audio: {...c.audio, captureEnabled: !c.audio.captureEnabled}}),
       kind: 'toggle',
     });
     out.push({
@@ -184,3 +227,7 @@ function renderItem(it: any) {
   return it.label;
 }
 
+function truncate(s: string, n: number) {
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1) + '…';
+}

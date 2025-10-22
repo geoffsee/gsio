@@ -32,3 +32,69 @@ $ gsio-ai --help
     $ gsio-ai --debug
     $ OPENAI_API_KEY=sk-... gsio-ai
 ```
+
+## Features
+
+- Chat in your terminal with streaming responses.
+- Built‑in tools: calculator, file read/list, HTTP GET, TODO management, shell_exec.
+- Project TODOs with status, priority, dependencies, notes, focus, and planning.
+- Interactive config menu: `gsio-ai config`.
+- Optional audio context with continuous capture + VAD + transcription + rolling summary.
+- Linger mode for autonomous actions based on recent audio context and your behavior directive.
+
+## Key Bindings
+
+- Enter: send message
+- Shift+Enter: newline
+- Alt/Option+A: toggle audio capture on/off
+- Up/Down: history navigation
+- Ctrl+A/E: home/end; Alt/Option+←/→: word nav; Alt/Option+Backspace: delete word
+
+## Configuration
+
+Run `gsio-ai config` to open the interactive menu.
+
+- Shell
+  - Allow dangerous commands: off by default; when off, `shell_exec` only runs an allowlist of read‑only commands.
+  - Extra allowlist: add additional safe commands for `shell_exec`.
+- TODO Panel
+  - Show completed: include done items in the panel.
+  - Max items: number of TODOs to show.
+- Audio
+  - Capture context from system audio: on/off.
+- Linger
+  - Linger: run continuously on audio (on/off).
+  - Linger behavior: a natural‑language description of how the agent should act when it hears relevant audio (situational awareness).
+  - Linger interval (sec): cooldown between autonomous runs.
+
+Config is stored in `.gsio-config.json` in the current working directory.
+
+## Tools Overview
+
+- calculator(expression)
+- read_file(path, maxBytes?)
+- list_files(dir?)
+- http_get(url, maxBytes?)
+- todo_add(text), todo_list(includeCompleted?), todo_update(id, text), todo_complete(id), todo_remove(id), todo_clear_all()
+- todo_set_status(id, status, blockedReason?)
+- todo_set_priority(id, priority 1..5)
+- todo_add_note(id, note)
+- todo_link_dep(id, dependsOnId), todo_unlink_dep(id, dependsOnId)
+- todo_focus(id|0)
+- todo_plan(steps[])
+- shell_exec(cmd, args[], cwd?, timeoutMs?, stdin?, dangerous?)
+
+Notes:
+- `shell_exec` defaults to a safe allowlist; add more in config or enable dangerous commands there. Execution is confined to the project directory, runs without a shell, and truncates output.
+- `http_get` limits size and only returns text/JSON content types.
+
+## Audio & Linger
+
+- Requirements: `ffmpeg` must be installed and your OS must allow microphone access.
+- Continuous capture with energy‑based VAD segments speech and transcribes short chunks.
+- A rolling audio summary is maintained and injected into agent instructions.
+- With Linger enabled, the agent periodically evaluates the audio context plus your behavior directive to take small, helpful actions (e.g., updating TODOs, focusing tasks, fetching info). Actions are concise and safe by default.
+
+Example behavior directive:
+
+"When I mention meetings, capture action items as TODOs (P2); if I say 'urgent', make them P1; set focus to the next actionable task and mark completed when I say it's done. Keep responses minimal."

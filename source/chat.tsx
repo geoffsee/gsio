@@ -3,32 +3,11 @@ import {Box, Newline, Text, useInput} from 'ink';
 import {Agent, run, type StreamedRunResult} from '@openai/agents';
 import {defaultTools} from './tools.js';
 import {listTodos, shortList, getFocus} from './todoStore.js';
-import {loadConfig} from './config.js';
+import {loadConfig, saveConfig} from './config.js';
+import {startContinuousCapture} from './audio.js';
+import {summarizeAudioContext} from './summarizer.js';
 
-const agent = new Agent({
-  name: 'Assistant',
-  instructions:
-    [
-      'You are a helpful assistant. Use tools when helpful. Prefer concise answers.',
-      'Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.',
-      'You can manage a persistent todo list stored in the current working directory using tools:',
-      '- todo_add(text): Add a new todo',
-      '- todo_list(includeCompleted=true): List todos',
-      '- todo_complete(id): Mark a todo done',
-      '- todo_remove(id): Remove a todo',
-      '- todo_update(id, text): Update todo text',
-      '- todo_clear_all(): Remove all todos',
-      '- todo_set_status(id, status, blockedReason?): Set status',
-      '- todo_set_priority(id, priority 1..5): Set priority',
-      '- todo_add_note(id, note): Append a note',
-      '- todo_link_dep(id, dependsOnId) / todo_unlink_dep(id, dependsOnId): Dependencies',
-      '- todo_focus(id|0): Focus a todo or clear focus',
-      '- todo_plan(steps[]): Bulk-add steps for planning',
-      'Keep responses short and show the resulting list when appropriate.',
-      'For files, stay within the working directory.',
-    ].join('\n'),
-  tools: defaultTools,
-});
+// Agent instantiated inside component based on config (e.g., audio flag)
 
 type Message = {
 	role: 'user' | 'assistant';
@@ -51,6 +30,45 @@ export const Chat = ({debug = false}: ChatProps) => {
   const [lastAction, setLastAction] = useState<string>('');
   const [todoPanel, setTodoPanel] = useState<string>('');
   const [focused, setFocused] = useState<number | null>(null);
+  const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
+  const [audioSummary, setAudioSummary] = useState<string>('');
+  const stopAudioRef = React.useRef<null | (() => void)>(null);
+  const [lingerEnabled, setLingerEnabled] = useState<boolean>(false);
+  const [lingerBehavior, setLingerBehavior] = useState<string>('');
+  const [lingerIntervalSec, setLingerIntervalSec] = useState<number>(20);
+  const lastLingerRef = React.useRef<number>(0);
+
+  // Build agent based on config flags
+  const agent = React.useMemo(() => {
+    const audioLine = audioEnabled
+      ? 'Audio context capture is enabled; prefer incorporating relevant auditory information if provided.'
+      : '';
+    return new Agent({
+      name: 'Assistant',
+      instructions: [
+        'You are a helpful assistant. Use tools when helpful. Prefer concise answers.',
+        'Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.',
+        audioLine,
+        audioSummary ? `Recent audio context summary: ${audioSummary}` : '',
+        'You can manage a persistent todo list stored in the current working directory using tools:',
+        '- todo_add(text): Add a new todo',
+        '- todo_list(includeCompleted=true): List todos',
+        '- todo_complete(id): Mark a todo done',
+        '- todo_remove(id): Remove a todo',
+        '- todo_update(id, text): Update todo text',
+        '- todo_clear_all(): Remove all todos',
+        '- todo_set_status(id, status, blockedReason?): Set status',
+        '- todo_set_priority(id, priority 1..5): Set priority',
+        '- todo_add_note(id, note): Append a note',
+        '- todo_link_dep(id, dependsOnId) / todo_unlink_dep(id, dependsOnId): Dependencies',
+        '- todo_focus(id|0): Focus a todo or clear focus',
+        '- todo_plan(steps[]): Bulk-add steps for planning',
+        'Keep responses short and show the resulting list when appropriate.',
+        'For files, stay within the working directory.',
+      ].filter(Boolean).join('\n'),
+      tools: defaultTools,
+    });
+  }, [audioEnabled, audioSummary]);
 
   const clampCursor = (pos: number, s: string = input) =>
     Math.max(0, Math.min(pos, s.length));
@@ -122,6 +140,28 @@ export const Chat = ({debug = false}: ChatProps) => {
           .join(', ') || '(none)'
       );
       setLastAction('(none)');
+    }
+    // Toggle audio capture: Alt/Meta + A
+    if (key.meta && (inputKey === 'a' || inputKey === 'A')) {
+      (async () => {
+        try {
+          const cfg = await loadConfig();
+          const next = !audioEnabled;
+          setAudioEnabled(next);
+          await saveConfig({...cfg, audio: {...cfg.audio, captureEnabled: next}});
+          setMessages((m: Message[]) => [
+            ...m,
+            {role: 'assistant', content: `Audio context ${next ? 'enabled' : 'disabled'}.`},
+          ]);
+          if (debug) setLastAction(`audio: ${next ? 'enabled' : 'disabled'}`);
+        } catch (e: any) {
+          setMessages((m: Message[]) => [
+            ...m,
+            {role: 'assistant', content: `Error toggling audio: ${e?.message || e}`},
+          ]);
+        }
+      })();
+      return;
     }
     // Submit / newline
     if (key.return) {
@@ -317,6 +357,10 @@ export const Chat = ({debug = false}: ChatProps) => {
       const f = await getFocus();
       setTodoPanel(head);
       setFocused(f);
+      setAudioEnabled(!!cfg.audio.captureEnabled);
+      setLingerEnabled(!!cfg.linger.enabled);
+      setLingerBehavior(cfg.linger.behavior || '');
+      setLingerIntervalSec(cfg.linger.minIntervalSec || 20);
     } catch {
       // ignore
     }
@@ -327,17 +371,86 @@ export const Chat = ({debug = false}: ChatProps) => {
     refreshTodos();
   }, [messages.length]);
 
+  // Start/stop continuous audio capture when toggled
+  React.useEffect(() => {
+    if (!audioEnabled) {
+      stopAudioRef.current?.();
+      stopAudioRef.current = null;
+      return;
+    }
+    stopAudioRef.current?.();
+    stopAudioRef.current = startContinuousCapture({
+      onTranscript: async (text) => {
+        setMessages((m: Message[]) => [...m, {role: 'assistant', content: `(heard) ${text}`}]);
+        try {
+          const next = await summarizeAudioContext(audioSummary, text);
+          setAudioSummary(next);
+        } catch (e: any) {
+          setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio summarize error: ${e?.message || e}`}]);
+        }
+
+        // Linger mode: autonomously act based on audio context
+        if (lingerEnabled) {
+          const now = Date.now();
+          if (!isStreaming && now - (lastLingerRef.current || 0) >= lingerIntervalSec * 1000) {
+            lastLingerRef.current = now;
+            await runLinger(text).catch((e)=> setMessages((m: Message[]) => [...m, {role:'assistant', content: `Linger error: ${e?.message || e}`}]) );
+          }
+        }
+      },
+      onStatus: (s) => setLastAction(`audio: ${s}`),
+      onError: (e) => setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio error: ${e}`}]),
+    });
+    return () => {
+      stopAudioRef.current?.();
+      stopAudioRef.current = null;
+    };
+  }, [audioEnabled, audioSummary]);
+
+  async function runLinger(latestUtterance: string) {
+    const instruction = `Linger mode is enabled. Behavior directive from user: ${lingerBehavior}\n\nRecent audio summary: ${audioSummary || '(none)'}\nLatest utterance: ${latestUtterance}\n\nDecide if any helpful action is warranted. If yes, act concisely (use tools when needed) and keep changes minimal and safe. If no action is valuable, reply briefly or remain silent.`;
+    const newMessages = [...messages, {role: 'user' as const, content: instruction}];
+    // Stream like a normal response
+    setMessages(newMessages as any);
+    setIsStreaming(true);
+    setResponse('');
+    try {
+      const stream: StreamedRunResult<any, any> = await run(agent, instruction, { stream: true });
+      let full = '';
+      for await (const event of stream) {
+        if (event.type === 'raw_model_stream_event' && event.data.type === 'output_text_delta') {
+          const d = event.data.delta;
+          if (d) {
+            full += d;
+            setResponse(full);
+          }
+        }
+      }
+      // append assistant output
+      setMessages((m: Message[]) => [...m, {role: 'assistant', content: full || '(no response)'}]);
+    } finally {
+      setIsStreaming(false);
+      refreshTodos().catch(()=>{});
+    }
+  }
+
   const left = input.slice(0, cursor);
   const right = input.slice(cursor);
 
   return (
     <Box flexDirection="column">
-      <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline)</Text>
+      <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline, Alt+A: audio)</Text>
       <Newline />
       {todoPanel && (
         <>
           <Text color="gray">TODOs {focused ? `(focus: #${focused})` : ''}</Text>
           <Text color="gray">{todoPanel}</Text>
+          <Newline />
+        </>
+      )}
+      {audioEnabled && (
+        <>
+          <Text color="gray">Audio context: enabled{audioSummary ? ' — summarized' : ''} {lingerEnabled ? '• Linger on' : ''}</Text>
           <Newline />
         </>
       )}
