@@ -3,18 +3,26 @@ import React from 'react';
 import {render} from 'ink';
 import meow from 'meow';
 import App from './app.js';
+import {Chat} from './chat.js';
 
 const cli = meow(
 	`
 	Usage
 	  $ gsio-ai
 
+	Description
+	  Start an interactive AI chat in your terminal. Type and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET).
+
+	Environment
+	  Requires OPENAI_API_KEY to be set in your environment.
+
 	Options
-		--name  Your name
+	  --name  Optional greeting name (shown at the top)
+	  --debug Enable input debugging (logs key info)
 
 	Examples
-	  $ gsio-ai --name=Jane
-	  Hello, Jane
+	  $ gsio-ai
+	  $ OPENAI_API_KEY=sk-... gsio-ai
 `,
 	{
 		importMeta: import.meta,
@@ -22,8 +30,17 @@ const cli = meow(
 			name: {
 				type: 'string',
 			},
+			debug: {
+				type: 'boolean',
+				default: false,
+			},
 		},
 	},
 );
 
-render(<App name={cli.flags.name} />);
+render(
+	<>
+		<Chat debug={Boolean(cli.flags.debug)} />
+		<App name={cli.flags.name} />
+	</>,
+);

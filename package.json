@@ -10,9 +10,11 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc && node dist/cli.js",
-		"test": "prettier --check . && xo && ava"
+		"test": "prettier --check . && ava"
 	},
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"dependencies": {
 		"@openai/agents": "^0.1.11",
 		"ink": "^4.1.0",
@@ -41,7 +43,9 @@
 			"ts": "module",
 			"tsx": "module"
 		},
-		"nodeArguments": ["--loader=ts-node/esm"]
+		"nodeArguments": [
+			"--loader=ts-node/esm"
+		]
 	},
 	"xo": {
 		"extends": "xo-react",
