@@ -4,6 +4,7 @@ import {render} from 'ink';
 import meow from 'meow';
 import App from './app.js';
 import {Chat} from './chat.js';
+import {ConfigMenu} from './configMenu.js';
 
 const cli = meow(
 	`
@@ -38,9 +39,15 @@ const cli = meow(
 	},
 );
 
+const subcommand = cli.input[0];
+
 render(
 	<>
-		<Chat debug={Boolean(cli.flags.debug)} />
+		{subcommand === 'config' ? (
+			<ConfigMenu />
+		) : (
+			<Chat debug={Boolean(cli.flags.debug)} />
+		)}
 		<App name={cli.flags.name} />
 	</>,
 );

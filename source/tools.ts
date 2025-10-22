@@ -2,6 +2,8 @@ import {tool} from '@openai/agents';
 import {z} from 'zod';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {loadConfig} from './config.js';
 import {
   addTodo,
   listTodos,
@@ -257,7 +259,7 @@ export const todoPlanTool = tool({
   },
 });
 
-export const defaultTools = [
+export const defaultTools: any[] = [
   calculatorTool,
   readFileTool,
   listFilesTool,
@@ -277,3 +279,96 @@ export const defaultTools = [
   todoFocusTool,
   todoPlanTool,
 ];
+
+// --- System command tool (opt-in) ---
+
+function withinCwd(target: string) {
+  const abs = path.resolve(process.cwd(), target);
+  return abs.startsWith(process.cwd());
+}
+
+async function runCommand(cmd: string, args: string[], options: {cwd: string; timeoutMs: number; stdin?: string}) {
+  const start = Date.now();
+  const child = spawn(cmd, args, {
+    cwd: options.cwd,
+    env: process.env,
+    shell: false,
+  });
+
+  const maxBytes = 200_000;
+  let out = '';
+  let err = '';
+  let timedOut = false;
+
+  const add = (acc: string, chunk: Buffer | string) => {
+    const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    const remaining = Math.max(0, maxBytes - acc.length);
+    return acc + s.slice(0, remaining);
+  };
+
+  child.stdout.on('data', (d) => {
+    out = add(out, d);
+  });
+  child.stderr.on('data', (d) => {
+    err = add(err, d);
+  });
+
+  if (options.stdin && options.stdin.length > 0) {
+    child.stdin.write(options.stdin);
+  }
+  child.stdin.end();
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill('SIGKILL');
+  }, options.timeoutMs);
+
+  const exitCode: number = await new Promise((resolve) => {
+    child.on('close', (code) => resolve(code ?? -1));
+  });
+  clearTimeout(timeout);
+  return {code: exitCode, stdout: out, stderr: err, timedOut, durationMs: Date.now() - start};
+}
+
+export const shellExecTool = tool({
+  name: 'shell_exec',
+  description:
+    'Run a system command with built-in safety. By default, only a small allowlist of read-only commands is permitted; set dangerous=true to run any command. Execution is confined to the current working directory and output is truncated.',
+  parameters: z.object({
+    cmd: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    cwd: z.string().default('.'),
+    timeoutMs: z.number().int().min(100).max(60_000).default(10_000),
+    stdin: z.string().default(''),
+    dangerous: z.boolean().default(false),
+  }),
+  async execute({cmd, args, cwd, timeoutMs, stdin, dangerous}) {
+    const cfg = await loadConfig();
+    const allowed = new Set<string>([
+      'ls', 'cat', 'pwd', 'echo', 'head', 'tail', 'wc', 'stat', 'rg', 'find'
+    ]);
+    for (const extra of cfg.shell.extraAllowlist) allowed.add(extra);
+    if (!dangerous && !allowed.has(cmd)) {
+      throw new Error(`Command not allowed in safe mode: ${cmd}`);
+    }
+    if (dangerous && !cfg.shell.allowDangerous) {
+      throw new Error('Dangerous commands are disabled in config. Enable it via `gsio-ai config`.');
+    }
+    const absCwd = path.resolve(process.cwd(), cwd);
+    if (!withinCwd(absCwd)) {
+      throw new Error('cwd must be within the working directory');
+    }
+    const {code, stdout, stderr, timedOut, durationMs} = await runCommand(cmd, args, {cwd: absCwd, timeoutMs, stdin});
+    const meta = `code=${code} timedOut=${timedOut} durationMs=${durationMs}`;
+    const truncated = (s: string) => (s.length >= 200000 ? s + '\n[truncated]\n' : s);
+    return [
+      `> ${cmd} ${args.join(' ')}`,
+      meta,
+      stdout ? `STDOUT:\n${truncated(stdout)}` : 'STDOUT: (empty)',
+      stderr ? `STDERR:\n${truncated(stderr)}` : 'STDERR: (empty)'
+    ].join('\n');
+  },
+});
+
+// Included by default; behavior controlled by project config.
+defaultTools.push(shellExecTool as any);

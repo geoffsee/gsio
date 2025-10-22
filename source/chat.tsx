@@ -3,6 +3,7 @@ import {Box, Newline, Text, useInput} from 'ink';
 import {Agent, run, type StreamedRunResult} from '@openai/agents';
 import {defaultTools} from './tools.js';
 import {listTodos, shortList, getFocus} from './todoStore.js';
+import {loadConfig} from './config.js';
 
 const agent = new Agent({
   name: 'Assistant',
@@ -245,7 +246,7 @@ export const Chat = ({debug = false}: ChatProps) => {
       if (debug) setLastAction(isMetaBackspace ? 'backspace: word' : (deleteMeansBackspace ? 'backspace: inferred-from-delete' : 'backspace: char'));
       return;
     }
-    
+
     // Forward delete: rely on Ink key flag; also support Ctrl+D
     if ((key.delete && !deleteMeansBackspace) || (key.ctrl && (inputKey === 'd' || inputKey === 'D'))) {
       if (cursor >= input.length) return;
@@ -310,8 +311,9 @@ export const Chat = ({debug = false}: ChatProps) => {
 
   async function refreshTodos() {
     try {
-      const items = await listTodos(true);
-      const head = shortList(items, 5);
+      const cfg = await loadConfig();
+      const items = await listTodos(cfg.panel.todoShowCompleted);
+      const head = shortList(items, cfg.panel.maxItems);
       const f = await getFocus();
       setTodoPanel(head);
       setFocused(f);
@@ -330,7 +332,7 @@ export const Chat = ({debug = false}: ChatProps) => {
 
   return (
     <Box flexDirection="column">
-      <Text color="cyan">🧠 GPT Chat (Enter: send, Shift+Enter: newline)</Text>
+      <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline)</Text>
       <Newline />
       {todoPanel && (
         <>

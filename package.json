@@ -1,6 +1,6 @@
 {
-	"name": "gsio-ai",
-	"version": "0.0.0",
+	"name": "gsio",
+	"version": "0.0.15",
 	"license": "MIT",
 	"bin": "dist/cli.js",
 	"type": "module",
@@ -10,7 +10,8 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc && node dist/cli.js",
-		"test": "prettier --check . && ava"
+		"test": "prettier --check . && ava",
+		"prepublishOnly": "tsc"
 	},
 	"files": [
 		"dist"

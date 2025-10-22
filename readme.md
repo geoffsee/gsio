@@ -17,7 +17,7 @@ $ gsio-ai --help
     $ gsio-ai
 
   Description
-    Start an interactive AI chat in your terminal. Type your message and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET).
+    Start an interactive AI chat in your terminal. Type your message and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET, todo management, shell_exec).
 
   Environment
     Requires OPENAI_API_KEY to be set in your environment.
@@ -28,6 +28,7 @@ $ gsio-ai --help
 
   Examples
     $ gsio-ai
+    $ gsio-ai config
     $ gsio-ai --debug
     $ OPENAI_API_KEY=sk-... gsio-ai
 ```
