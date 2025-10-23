@@ -25,6 +25,9 @@ export type AppConfig = {
       language?: string; // optional language code, e.g., 'en'
       extraArgs?: string[]; // optional extra CLI args
     };
+    openaiTranscribeModel?: string; // model id for /v1/audio/transcriptions
+    openaiBaseUrl?: string; // optional override for STT server (e.g., MLX Omni)
+    openaiApiKey?: string; // optional override for STT server
   };
   linger: {
     enabled: boolean;
@@ -46,6 +49,9 @@ const DEFAULT_CONFIG: AppConfig = {
       language: 'en',
       extraArgs: [],
     },
+    openaiTranscribeModel: 'gpt-4o-transcribe',
+    openaiBaseUrl: '',
+    openaiApiKey: '',
   },
   linger: {
     enabled: false,
@@ -119,6 +125,14 @@ function normalizeConfig(input: any): AppConfig {
           ? input.audio.whisper.extraArgs.filter((s: any) => typeof s === 'string')
           : DEFAULT_CONFIG.audio.whisper.extraArgs,
       },
+      openaiTranscribeModel:
+        typeof input?.audio?.openaiTranscribeModel === 'string' && input.audio.openaiTranscribeModel.trim().length > 0
+          ? String(input.audio.openaiTranscribeModel)
+          : DEFAULT_CONFIG.audio.openaiTranscribeModel,
+      openaiBaseUrl:
+        typeof input?.audio?.openaiBaseUrl === 'string' ? String(input.audio.openaiBaseUrl) : DEFAULT_CONFIG.audio.openaiBaseUrl,
+      openaiApiKey:
+        typeof input?.audio?.openaiApiKey === 'string' ? String(input.audio.openaiApiKey) : DEFAULT_CONFIG.audio.openaiApiKey,
     },
     linger: {
       enabled: !!input?.linger?.enabled,

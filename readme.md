@@ -40,7 +40,7 @@ $ gsio --help
 - Optional audio context with continuous capture + VAD + transcription + rolling summary.
 - Linger mode for autonomous actions based on recent audio context and your behavior directive.
 
-Note: Audio transcription currently requires OpenAI; Ollama mode disables transcription.
+Audio transcription can run locally via MLX Omni Server (OpenAI-compatible) while using Ollama for chat. See Hybrid setup below.
 
 ## Key Bindings
 
@@ -85,6 +85,19 @@ Config is stored in `.gsio-config.json` in the current working directory.
 Tips:
 - If using an OpenAI‑compatible proxy for Ollama, the defaults above should work.
 - Function/tool calling support depends on the model/server; general chat works regardless.
+
+### Hybrid: Ollama for chat, MLX Omni for audio
+
+1. Start MLX Omni Server: `pip install mlx-omni-server && mlx-omni-server` (defaults to `http://localhost:10240/v1`).
+2. Configure `.gsio-config.json` (or use `.ollama-gsio-config.json`):
+   - AI provider: `ollama`
+   - AI model: e.g., `llama3.1:8b`
+   - AI base URL: `http://localhost:11434/v1`
+   - Audio STT provider: `openai`
+   - Audio STT base URL: `http://localhost:10240/v1`
+   - Audio STT model: `mlx-community/whisper-large-v3-turbo`
+   - Audio STT apiKey: `not-needed`
+3. Toggle audio with Alt+A; STT goes to MLX Omni while chat uses Ollama.
 
 ## Tools Overview
 
