@@ -352,7 +352,7 @@ export const shellExecTool = tool({
       throw new Error(`Command not allowed in safe mode: ${cmd}`);
     }
     if (dangerous && !cfg.shell.allowDangerous) {
-      throw new Error('Dangerous commands are disabled in config. Enable it via `gsio-ai config`.');
+      throw new Error('Dangerous commands are disabled in config. Enable it via `gsio config`.');
     }
     const absCwd = path.resolve(process.cwd(), cwd);
     if (!withinCwd(absCwd)) {
