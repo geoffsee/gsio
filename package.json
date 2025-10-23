@@ -1,6 +1,6 @@
 {
 	"name": "gsio",
-	"version": "0.0.18",
+	"version": "0.1.1",
 	"license": "MIT",
 	"bin": "dist/cli.js",
 	"type": "module",
@@ -8,10 +8,10 @@
 		"node": ">=16"
 	},
 	"scripts": {
-		"build": "tsc",
-		"dev": "tsc && node dist/cli.js",
+		"build": "rm -rf ./dist && bun ./build.ts",
+		"dev": "bun run build && node dist/cli.js",
 		"test": "prettier --check . && ava",
-		"prepublishOnly": "tsc"
+		"prepublishOnly": "bun run build"
 	},
 	"files": [
 		"dist"
