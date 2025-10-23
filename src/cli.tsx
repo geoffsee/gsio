@@ -10,7 +10,7 @@ import {configureLLM} from './llm.js';
 const cli = meow(
 	`
 	Usage
-	  $ gsio-ai
+	  $ gsio
 
 	Description
 	  Start an interactive AI chat in your terminal. Type and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET).
@@ -23,8 +23,8 @@ const cli = meow(
 	  --debug Enable input debugging (logs key info)
 
 	Examples
-	  $ gsio-ai
-	  $ OPENAI_API_KEY=sk-... gsio-ai
+	  $ gsio
+	  $ OPENAI_API_KEY=sk-...
 `,
 	{
 		importMeta: import.meta,

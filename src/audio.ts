@@ -282,7 +282,7 @@ export function startContinuousCapture({ onTranscript, onStatus, onError, onMetr
   async function transcribeWithLocalWhisper(wavPath: string, cmd: string, modelPath: string, language?: string, extraArgs: string[] = []): Promise<string> {
     return await new Promise<string>((resolve) => {
       if (!cmd || !modelPath) {
-        onError?.('Whisper command/model not configured. Use `gsio-ai config` to set them.');
+        onError?.('Whisper command/model not configured. Use `gsio config` to set them.');
         return resolve('');
       }
       const outPrefix = path.join(os.tmpdir(), `gsio-whisper-${Date.now()}`);
