@@ -1,8 +1,8 @@
 {
 	"ai": {
-		"provider": "openai",
-		"model": "gpt-4o-mini",
-		"baseUrl": "",
+		"provider": "ollama",
+		"model": "llama3.1:8b",
+		"baseUrl": "http://localhost:11434",
 		"apiKey": ""
 	},
 	"shell": {
@@ -22,9 +22,9 @@
 			"language": "en",
 			"extraArgs": []
 		},
-		"openaiTranscribeModel": "gpt-4o-transcribe",
-		"openaiBaseUrl": "",
-		"openaiApiKey": ""
+		"openaiTranscribeModel": "mlx-community/whisper-large-v3-turbo",
+		"openaiBaseUrl": "http://localhost:10240/v1",
+		"openaiApiKey": "not-needed"
 	},
 	"linger": {
 		"enabled": false,

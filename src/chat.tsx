@@ -410,7 +410,9 @@ export const Chat = ({debug = false}: ChatProps) => {
           const next = await summarizeAudioContext(audioSummary, text);
           setAudioSummary(next);
         } catch (e: any) {
-          setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio summarize error: ${e?.message || e}`}]);
+          const errMsg = e?.message || String(e);
+          appendAudioLog(`summarizer error: ${errMsg}`);
+          setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Audio summarize error: ${errMsg}`}]);
         }
 
         // Linger mode: autonomously act based on audio context

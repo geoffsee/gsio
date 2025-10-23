@@ -2,3 +2,8 @@ node_modules
 dist
 openai-agents-js
 .idea
+*.bin
+models/
+/.mlx-omni-gsio-config.json
+/.ollama-gsio-config.json
+/.openai-gsio-config.json

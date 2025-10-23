@@ -256,11 +256,20 @@ export function startContinuousCapture({ onTranscript, onStatus, onError, onMetr
         }
         return;
       }
-      // Default to OpenAI transcription
-      const client = new OpenAI();
+      // Default to OpenAI-compatible transcription; prefer audio-specific overrides
+      const sttApiKey = (cfg.audio?.openaiApiKey && cfg.audio.openaiApiKey.length > 0)
+        ? cfg.audio.openaiApiKey
+        : ((cfg.ai?.apiKey && cfg.ai.apiKey.length > 0) ? cfg.ai.apiKey : (process.env.OPENAI_API_KEY || ''));
+      const sttBaseUrl = (cfg.audio?.openaiBaseUrl && cfg.audio.openaiBaseUrl.length > 0)
+        ? cfg.audio.openaiBaseUrl
+        : ((cfg.ai?.baseUrl && cfg.ai.baseUrl.length > 0) ? cfg.ai.baseUrl : undefined);
+      const client = new OpenAI({
+        apiKey: sttApiKey,
+        baseURL: sttBaseUrl,
+      } as any);
       const resp = await client.audio.transcriptions.create({
         file: (await import('node:fs')).createReadStream(tmpWav) as any,
-        model: 'gpt-4o-transcribe',
+        model: cfg.audio?.openaiTranscribeModel || 'gpt-4o-transcribe',
       } as any);
       const text = (resp as any).text || '';
       if (text.trim().length > 0) {
@@ -277,50 +286,140 @@ export function startContinuousCapture({ onTranscript, onStatus, onError, onMetr
       // cleanup
       fs.unlink(tmpWav).catch(() => {});
     }
+  } 
+
+  // Resolve a binary on PATH (cross-platform) and model file paths
+  async function which(bin: string): Promise<string | null> {
+    return await new Promise((resolve) => {
+      try {
+        const cmd = process.platform === 'win32' ? 'where' : 'which';
+        const p = spawn(cmd, [bin]);
+        let out = '';
+        p.stdout.on('data', (b) => (out += String(b || '')));
+        p.on('close', (code) => {
+          if (code === 0 && out.trim().length > 0) resolve(out.trim().split(/\r?\n/)[0] || bin);
+          else resolve(null);
+        });
+        p.on('error', () => resolve(null));
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async function fileExists(p: string): Promise<boolean> {
+    try { await fs.access(p); return true; } catch { return false; }
+  }
+
+  async function resolveWhisperCommand(preferred?: string): Promise<string | null> {
+    const candidates = [preferred, 'whisper-cpp', 'whisper_cli', 'whisper', 'main']
+      .filter(Boolean) as string[];
+    for (const c of candidates) {
+      if (c.includes('/') || (process.platform === 'win32' && c.includes('\\'))) {
+        if (await fileExists(c)) return c;
+      } else {
+        const w = await which(c);
+        if (w) return w;
+      }
+    }
+    return null;
+  }
+
+  function expandModelShorthand(model?: string): string[] {
+    const m = (model || '').trim();
+    if (!m) {
+      return [
+        'ggml-small.en.bin',
+        'ggml-base.en.bin',
+        'ggml-small.bin',
+        'ggml-base.bin',
+      ];
+    }
+    if (!m.endsWith('.bin') && !m.includes(path.sep)) {
+      return [
+        `ggml-${m}.bin`,
+        `ggml-${m.replace(/\.en$/, '')}.en.bin`,
+      ];
+    }
+    return [m];
+  }
+
+  async function resolveWhisperModel(model?: string): Promise<string | null> {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const searchDirs = [
+      process.cwd(),
+      path.join(process.cwd(), 'models'),
+      home ? path.join(home, 'models') : '',
+      home ? path.join(home, '.cache', 'whisper') : '',
+      home ? path.join(home, '.local', 'share', 'whisper') : '',
+      '/usr/local/share/whisper',
+      '/opt/homebrew/share/whisper',
+      '/opt/homebrew/opt/whisper-cpp/share/whisper',
+    ].filter(Boolean);
+    const candidates = expandModelShorthand(model);
+    for (const dir of searchDirs) {
+      for (const name of candidates) {
+        const p = path.isAbsolute(name) ? name : path.join(dir, name);
+        if (await fileExists(p)) return p;
+      }
+    }
+    if (model && !path.isAbsolute(model)) {
+      const p = path.join(process.cwd(), model);
+      if (await fileExists(p)) return p;
+    }
+    return null;
   }
 
   async function transcribeWithLocalWhisper(wavPath: string, cmd: string, modelPath: string, language?: string, extraArgs: string[] = []): Promise<string> {
     return await new Promise<string>((resolve) => {
-      if (!cmd || !modelPath) {
-        onError?.('Whisper command/model not configured. Use `gsio config` to set them.');
-        return resolve('');
-      }
-      const outPrefix = path.join(os.tmpdir(), `gsio-whisper-${Date.now()}`);
-      const args = [
-        '-m', modelPath,
-        '-f', wavPath,
-        '-otxt',
-        '-of', outPrefix,
-      ];
-      if (language) {
-        args.push('-l', language);
-      }
-      if (Array.isArray(extraArgs) && extraArgs.length > 0) {
-        args.push(...extraArgs);
-      }
-      const child = spawn(cmd, args);
-      let stderr = '';
-      child.stderr.on('data', (buf) => { stderr += String(buf || ''); });
-      child.on('error', (err) => {
-        onError?.(`Failed to start Whisper: ${err?.message || err}`);
-        resolve('');
-      });
-      child.on('close', async (code) => {
-        if (code !== 0) {
-          onError?.(`Whisper exited with code ${code}${stderr ? `: ${stderr}` : ''}`);
+      const run = async () => {
+        const resolvedCmd = await resolveWhisperCommand(cmd);
+        const resolvedModel = await resolveWhisperModel(modelPath);
+        if (!resolvedCmd) {
+          onError?.('Whisper executable not found. Install whisper.cpp (e.g., brew install whisper-cpp) or set audio.whisper.command.');
           return resolve('');
         }
-        try {
-          const outTxt = await fs.readFile(`${outPrefix}.txt`, 'utf8');
-          resolve(outTxt || '');
-        } catch (e: any) {
-          onError?.(`Failed reading Whisper output: ${e?.message || e}`);
-          resolve('');
-        } finally {
-          // Cleanup generated files
-          fs.unlink(`${outPrefix}.txt`).catch(() => {});
+        if (!resolvedModel) {
+          onError?.('Whisper model not found. Place a ggml-*.bin in ./models or configure audio.whisper.model.');
+          return resolve('');
         }
-      });
+        const outPrefix = path.join(os.tmpdir(), `gsio-whisper-${Date.now()}`);
+        const args = [
+          '-m', resolvedModel,
+          '-f', wavPath,
+          '-otxt',
+          '-of', outPrefix,
+        ];
+        if (language) {
+          args.push('-l', language);
+        }
+        if (Array.isArray(extraArgs) && extraArgs.length > 0) {
+          args.push(...extraArgs);
+        }
+        const child = spawn(resolvedCmd, args);
+        let stderr = '';
+        child.stderr.on('data', (buf) => { stderr += String(buf || ''); });
+        child.on('error', (err) => {
+          onError?.(`Failed to start Whisper: ${err?.message || err}`);
+          resolve('');
+        });
+        child.on('close', async (code) => {
+          if (code !== 0) {
+            onError?.(`Whisper exited with code ${code}${stderr ? `: ${stderr}` : ''}`);
+            return resolve('');
+          }
+          try {
+            const outTxt = await fs.readFile(`${outPrefix}.txt`, 'utf8');
+            resolve(outTxt || '');
+          } catch (e: any) {
+            onError?.(`Failed reading Whisper output: ${e?.message || e}`);
+            resolve('');
+          } finally {
+            fs.unlink(`${outPrefix}.txt`).catch(() => {});
+          }
+        });
+      };
+      void run();
     });
   }
 
