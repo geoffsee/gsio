@@ -1,4 +1,4 @@
-# gsio-ai
+# gsio
 
 ## Install
 
@@ -9,10 +9,10 @@ $ npx gsio
 ## CLI
 
 ```
-$ gsio-ai --help
+$ gsio --help
 
   Usage
-    $ gsio-ai
+    $ gsio
 
   Description
     Start an interactive AI chat in your terminal. Type your message and press Enter to send. The assistant can use tools (calculator, file read/list, HTTP GET, todo management, shell_exec).
@@ -25,10 +25,10 @@ $ gsio-ai --help
     --debug Enable input debugging (logs key info)
 
   Examples
-    $ gsio-ai
-    $ gsio-ai config
-    $ gsio-ai --debug
-    $ OPENAI_API_KEY=sk-... gsio-ai
+    $ gsio
+    $ gsio config
+    $ gsio --debug
+    $ OPENAI_API_KEY=sk-... gsio
 ```
 
 ## Features
@@ -36,7 +36,7 @@ $ gsio-ai --help
 - Chat in your terminal with streaming responses.
 - Built‑in tools: calculator, file read/list, HTTP GET, TODO management, shell_exec.
 - Project TODOs with status, priority, dependencies, notes, focus, and planning.
-- Interactive config menu: `gsio-ai config`.
+- Interactive config menu: `gsio config`.
 - Optional audio context with continuous capture + VAD + transcription + rolling summary.
 - Linger mode for autonomous actions based on recent audio context and your behavior directive.
 
@@ -52,7 +52,7 @@ Note: Audio transcription currently requires OpenAI; Ollama mode disables transc
 
 ## Configuration
 
-Run `gsio-ai config` to open the interactive menu.
+Run `gsio config` to open the interactive menu.
 
 - Shell
   - Allow dangerous commands: off by default; when off, `shell_exec` only runs an allowlist of read‑only commands.
@@ -76,11 +76,11 @@ Config is stored in `.gsio-config.json` in the current working directory.
 ### Offline with Ollama
 
 1. Install Ollama and pull a model, e.g.: `ollama pull llama3.1:8b`.
-2. Run `gsio-ai config` and set:
+2. Run `gsio config` and set:
    - AI provider: `ollama`
    - AI model: `llama3.1:8b` (or your choice)
    - AI base URL: `http://localhost:11434/v1`
-3. Start `gsio-ai` — chat and tools run locally via Ollama.
+3. Start `gsio` — chat and tools run locally via Ollama.
 
 Tips:
 - If using an OpenAI‑compatible proxy for Ollama, the defaults above should work.
@@ -121,11 +121,11 @@ Example behavior directive:
 You can transcribe audio locally using Whisper (no network).
 
 - Install a Whisper CLI (e.g., whisper.cpp) and download a model, e.g.: `ggml-base.en.bin`.
-- Run `gsio-ai config` and set under Audio:
+- Run `gsio config` and set under Audio:
   - Audio STT provider: `whisper`
   - Whisper command: name or path of your Whisper binary (e.g., `whisper-cpp` or `./main`). Ensure it’s on your PATH.
   - Whisper model: full path to your `.bin` model file.
-- Start `gsio-ai` and toggle audio (Alt+A).
+- Start `gsio` and toggle audio (Alt+A).
 
 Notes:
 - The app invokes Whisper like: `whisper-cpp -m <model.bin> -f <wav> -otxt -of <tmpPrefix> [-l en]` and reads `<tmpPrefix>.txt`.
