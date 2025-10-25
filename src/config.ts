@@ -34,6 +34,9 @@ export type AppConfig = {
     behavior: string; // natural language
     minIntervalSec: number; // cooldown between autonomous runs
   };
+  tools: {
+    requireApproval: string[]; // tool names requiring approval before execution
+  };
 };
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -58,6 +61,9 @@ const DEFAULT_CONFIG: AppConfig = {
     behavior:
       'When useful, infer what the user is doing from recent audio and take helpful actions: add/update TODOs, set focus/status/priority, or fetch information. Keep changes minimal and safe. Respond concisely only when it adds value.',
     minIntervalSec: 20,
+  },
+  tools: {
+    requireApproval: ['shell_exec'],
   },
 };
 
@@ -142,7 +148,20 @@ function normalizeConfig(input: any): AppConfig {
           : DEFAULT_CONFIG.linger.behavior,
       minIntervalSec: clampInt(input?.linger?.minIntervalSec, 5, 600, DEFAULT_CONFIG.linger.minIntervalSec),
     },
+    tools: {
+      requireApproval: Array.isArray(input?.tools?.requireApproval)
+        ? input.tools.requireApproval
+            .map((s: any) => (typeof s === 'string' ? s.trim() : ''))
+            .filter((s: string) => s.length > 0)
+        : [],
+    },
   };
+  cfg.tools.requireApproval = Array.from(
+    new Set([
+      ...cfg.tools.requireApproval,
+      ...DEFAULT_CONFIG.tools.requireApproval,
+    ]),
+  );
   return cfg;
 }
 

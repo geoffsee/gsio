@@ -7,3 +7,4 @@ models/
 /.mlx-omni-gsio-config.json
 /.ollama-gsio-config.json
 /.openai-gsio-config.json
+notes.txt

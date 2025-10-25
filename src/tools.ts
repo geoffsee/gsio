@@ -20,6 +20,17 @@ import {
   setFocus,
 } from './todoStore.js';
 
+const needsApprovalFor = (toolName: string) => {
+  return async (_ctx?: unknown, _input?: unknown, _callId?: string) => {
+    try {
+      const cfg = await loadConfig();
+      return cfg.tools.requireApproval.includes(toolName);
+    } catch {
+      return false;
+    }
+  };
+};
+
 // Calculator tool with simple, safe evaluation
 export const calculatorTool = tool({
   name: 'calculator',
@@ -28,6 +39,7 @@ export const calculatorTool = tool({
   parameters: z.object({
     expression: z.string().min(1, 'expression required'),
   }),
+  needsApproval: needsApprovalFor('calculator'),
   async execute({expression}) {
     const sanitized = expression.replace(/\s+/g, '');
     if (!/^[0-9+\-*/().]+$/.test(sanitized)) {
@@ -52,6 +64,7 @@ export const readFileTool = tool({
     path: z.string().min(1, 'path required'),
     maxBytes: z.number().int().positive().max(200_000).default(50_000),
   }),
+  needsApproval: needsApprovalFor('read_file'),
   async execute({path: p, maxBytes}) {
     const abs = path.resolve(process.cwd(), p);
     if (!abs.startsWith(process.cwd())) {
@@ -73,6 +86,7 @@ export const listFilesTool = tool({
   parameters: z.object({
     dir: z.string().default('.'),
   }),
+  needsApproval: needsApprovalFor('list_files'),
   async execute({dir}) {
     const abs = path.resolve(process.cwd(), dir);
     if (!abs.startsWith(process.cwd())) {
@@ -94,6 +108,7 @@ export const httpGetTool = tool({
     url: z.string().min(1, 'url required').describe('HTTP(S) URL'),
     maxBytes: z.number().int().positive().max(200_000).default(100_000),
   }),
+  needsApproval: needsApprovalFor('http_get'),
   async execute({url, maxBytes}) {
     if (typeof fetch !== 'function') {
       throw new Error('fetch is not available in this Node version.');
@@ -127,6 +142,7 @@ export const todoAddTool = tool({
   name: 'todo_add',
   description: 'Add a todo item to the persistent list in the current directory.',
   parameters: z.object({ text: z.string().min(1, 'text required') }),
+  needsApproval: needsApprovalFor('todo_add'),
   async execute({text}) {
     const t = await addTodo(text);
     return `Added todo #${t.id}: ${t.text}`;
@@ -137,6 +153,7 @@ export const todoListTool = tool({
   name: 'todo_list',
   description: 'List todo items. Set includeCompleted=false to show only pending.',
   parameters: z.object({ includeCompleted: z.boolean().default(true) }),
+  needsApproval: needsApprovalFor('todo_list'),
   async execute({includeCompleted}) {
     const items = await listTodos(includeCompleted);
     return formatTodos(items);
@@ -147,6 +164,7 @@ export const todoCompleteTool = tool({
   name: 'todo_complete',
   description: 'Mark a todo as completed by its numeric id.',
   parameters: z.object({ id: z.number().int().positive() }),
+  needsApproval: needsApprovalFor('todo_complete'),
   async execute({id}) {
     const t = await completeTodo(id);
     return t ? `Completed #${t.id}: ${t.text}` : `Todo #${id} not found.`;
@@ -157,6 +175,7 @@ export const todoRemoveTool = tool({
   name: 'todo_remove',
   description: 'Remove a todo by its numeric id.',
   parameters: z.object({ id: z.number().int().positive() }),
+  needsApproval: needsApprovalFor('todo_remove'),
   async execute({id}) {
     const t = await removeTodo(id);
     return t ? `Removed #${t.id}: ${t.text}` : `Todo #${id} not found.`;
@@ -167,6 +186,7 @@ export const todoUpdateTool = tool({
   name: 'todo_update',
   description: 'Update the text of a todo by id.',
   parameters: z.object({ id: z.number().int().positive(), text: z.string().min(1) }),
+  needsApproval: needsApprovalFor('todo_update'),
   async execute({id, text}) {
     const t = await updateTodo(id, text);
     return t ? `Updated #${t.id}: ${t.text}` : `Todo #${id} not found.`;
@@ -177,6 +197,7 @@ export const todoClearTool = tool({
   name: 'todo_clear_all',
   description: 'Remove all todos from the list.',
   parameters: z.object({}),
+  needsApproval: needsApprovalFor('todo_clear_all'),
   async execute() {
     const count = await clearTodos();
     return `Cleared ${count} todo(s).`;
@@ -187,6 +208,7 @@ export const todoSetStatusTool = tool({
   name: 'todo_set_status',
   description: "Set a todo's status: one of 'todo', 'in_progress', 'blocked', 'done'.",
   parameters: z.object({ id: z.number().int().positive(), status: z.enum(['todo','in_progress','blocked','done']), blockedReason: z.string().nullable().default(null) }),
+  needsApproval: needsApprovalFor('todo_set_status'),
   async execute({id, status, blockedReason}) {
     const reason = blockedReason === null ? undefined : blockedReason;
     const t = await setStatus(id, status as any, reason);
@@ -198,6 +220,7 @@ export const todoSetPriorityTool = tool({
   name: 'todo_set_priority',
   description: "Set a todo's priority from 1 (highest) to 5 (lowest).",
   parameters: z.object({ id: z.number().int().positive(), priority: z.number().int().min(1).max(5) }),
+  needsApproval: needsApprovalFor('todo_set_priority'),
   async execute({id, priority}) {
     const t = await setPriority(id, priority as any);
     return t ? `Priority for #${t.id} -> P${t.priority}` : `Todo #${id} not found.`;
@@ -208,6 +231,7 @@ export const todoAddNoteTool = tool({
   name: 'todo_add_note',
   description: 'Append a note to a todo.',
   parameters: z.object({ id: z.number().int().positive(), note: z.string().min(1) }),
+  needsApproval: needsApprovalFor('todo_add_note'),
   async execute({id, note}) {
     const t = await addNoteToTodo(id, note);
     return t ? `Noted #${t.id}.` : `Todo #${id} not found.`;
@@ -218,6 +242,7 @@ export const todoLinkDepTool = tool({
   name: 'todo_link_dep',
   description: 'Add a dependency to a todo (id dependsOn dependsOnId).',
   parameters: z.object({ id: z.number().int().positive(), dependsOnId: z.number().int().positive() }),
+  needsApproval: needsApprovalFor('todo_link_dep'),
   async execute({id, dependsOnId}) {
     const t = await linkDependency(id, dependsOnId);
     return t ? `#${t.id} now depends on #${dependsOnId}.` : `Todo or dependency not found.`;
@@ -228,6 +253,7 @@ export const todoUnlinkDepTool = tool({
   name: 'todo_unlink_dep',
   description: 'Remove a dependency from a todo (id no longer depends on dependsOnId).',
   parameters: z.object({ id: z.number().int().positive(), dependsOnId: z.number().int().positive() }),
+  needsApproval: needsApprovalFor('todo_unlink_dep'),
   async execute({id, dependsOnId}) {
     const t = await unlinkDependency(id, dependsOnId);
     return t ? `#${t.id} no longer depends on #${dependsOnId}.` : `Todo or dependency not found.`;
@@ -238,6 +264,7 @@ export const todoFocusTool = tool({
   name: 'todo_focus',
   description: 'Set or clear the focused todo (pass id, or 0 to clear).',
   parameters: z.object({ id: z.number().int().min(0) }),
+  needsApproval: needsApprovalFor('todo_focus'),
   async execute({id}) {
     const newId = await setFocus(id === 0 ? null : id);
     return newId ? `Focused on #${newId}.` : 'Focus cleared.';
@@ -248,6 +275,7 @@ export const todoPlanTool = tool({
   name: 'todo_plan',
   description: 'Bulk-add planned steps for a goal. Provide steps in order.',
   parameters: z.object({ steps: z.array(z.string().min(1)).min(1) }),
+  needsApproval: needsApprovalFor('todo_plan'),
   async execute({steps}) {
     const ids: number[] = [];
     for (const s of steps) {
@@ -289,12 +317,6 @@ function withinCwd(target: string) {
 
 async function runCommand(cmd: string, args: string[], options: {cwd: string; timeoutMs: number; stdin?: string}) {
   const start = Date.now();
-  const child = spawn(cmd, args, {
-    cwd: options.cwd,
-    env: process.env,
-    shell: false,
-  });
-
   const maxBytes = 200_000;
   let out = '';
   let err = '';
@@ -306,28 +328,61 @@ async function runCommand(cmd: string, args: string[], options: {cwd: string; ti
     return acc + s.slice(0, remaining);
   };
 
-  child.stdout.on('data', (d) => {
-    out = add(out, d);
-  });
-  child.stderr.on('data', (d) => {
-    err = add(err, d);
-  });
+  return await new Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    durationMs: number;
+    spawnError?: Error;
+  }>((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: options.cwd,
+      env: process.env,
+      shell: false,
+    });
 
-  if (options.stdin && options.stdin.length > 0) {
-    child.stdin.write(options.stdin);
-  }
-  child.stdin.end();
+    child.stdout.on('data', (d) => {
+      out = add(out, d);
+    });
+    child.stderr.on('data', (d) => {
+      err = add(err, d);
+    });
 
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill('SIGKILL');
-  }, options.timeoutMs);
+    if (options.stdin && options.stdin.length > 0) {
+      child.stdin.write(options.stdin);
+    }
+    child.stdin.end();
 
-  const exitCode: number = await new Promise((resolve) => {
-    child.on('close', (code) => resolve(code ?? -1));
+    let settled = false;
+    const finish = (code: number, spawnError?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve({
+        code,
+        stdout: out,
+        stderr: err,
+        timedOut,
+        durationMs: Date.now() - start,
+        spawnError,
+      });
+    };
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, options.timeoutMs);
+
+    child.once('error', (spawnErr) => {
+      err = add(err, `${spawnErr.message}\n`);
+      finish(-1, spawnErr);
+    });
+
+    child.once('close', (code) => {
+      finish(code ?? -1);
+    });
   });
-  clearTimeout(timeout);
-  return {code: exitCode, stdout: out, stderr: err, timedOut, durationMs: Date.now() - start};
 }
 
 export const shellExecTool = tool({
@@ -342,10 +397,22 @@ export const shellExecTool = tool({
     stdin: z.string().default(''),
     dangerous: z.boolean().default(false),
   }),
+  needsApproval: needsApprovalFor('shell_exec'),
   async execute({cmd, args, cwd, timeoutMs, stdin, dangerous}) {
     const cfg = await loadConfig();
     const allowed = new Set<string>([
-      'ls', 'cat', 'pwd', 'echo', 'head', 'tail', 'wc', 'stat', 'rg', 'find'
+      'ls',
+      'cat',
+      'pwd',
+      'echo',
+      'head',
+      'tail',
+      'wc',
+      'stat',
+      'rg',
+      'find',
+      'mkdir',
+      'bun'
     ]);
     for (const extra of cfg.shell.extraAllowlist) allowed.add(extra);
     if (!dangerous && !allowed.has(cmd)) {
@@ -358,8 +425,8 @@ export const shellExecTool = tool({
     if (!withinCwd(absCwd)) {
       throw new Error('cwd must be within the working directory');
     }
-    const {code, stdout, stderr, timedOut, durationMs} = await runCommand(cmd, args, {cwd: absCwd, timeoutMs, stdin});
-    const meta = `code=${code} timedOut=${timedOut} durationMs=${durationMs}`;
+    const {code, stdout, stderr, timedOut, durationMs, spawnError} = await runCommand(cmd, args, {cwd: absCwd, timeoutMs, stdin});
+    const meta = `code=${code} timedOut=${timedOut} durationMs=${durationMs}${spawnError ? ` spawnError=${spawnError.name}` : ''}`;
     const truncated = (s: string) => (s.length >= 200000 ? s + '\n[truncated]\n' : s);
     return [
       `> ${cmd} ${args.join(' ')}`,
