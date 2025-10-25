@@ -1,9 +1,13 @@
 # gsio
 
+BYO Mechatronics
+
+> Warning: Work in progress. Messy, heavy, but working.
+
 ## Install
 
 ```bash
-$ npx gsio
+$ npx gsio chat
 ```
 
 ## CLI
@@ -143,4 +147,3 @@ You can transcribe audio locally using Whisper (no network).
 Notes:
 - The app invokes Whisper like: `whisper-cpp -m <model.bin> -f <wav> -otxt -of <tmpPrefix> [-l en]` and reads `<tmpPrefix>.txt`.
 - Customize extra flags by editing `.gsio-config.json` (`audio.whisper.extraArgs`).
-- If you prefer an OpenAI‑compatible HTTP polyfill for `/v1/audio/transcriptions`, we can add a small local server that shells out to Whisper on request. Ask and I’ll wire it up.

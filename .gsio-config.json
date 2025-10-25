@@ -1,12 +1,12 @@
 {
 	"ai": {
 		"provider": "openai",
-		"model": "gpt-4o-mini",
+		"model": "gpt-4.1-mini",
 		"baseUrl": "",
 		"apiKey": ""
 	},
 	"shell": {
-		"allowDangerous": false,
+		"allowDangerous": true,
 		"extraAllowlist": []
 	},
 	"panel": {
@@ -14,7 +14,7 @@
 		"maxItems": 5
 	},
 	"audio": {
-		"captureEnabled": true,
+		"captureEnabled": false,
 		"sttProvider": "openai",
 		"whisper": {
 			"command": "",

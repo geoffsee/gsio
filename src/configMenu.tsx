@@ -2,7 +2,16 @@ import React, {useEffect, useState} from 'react';
 import {Box, Text, Newline, useApp, useInput} from 'ink';
 import {loadConfig, saveConfig, type AppConfig} from './config.js';
 
-type Mode = 'browse' | 'editAllow' | 'editBehavior' | 'editModel' | 'editBaseUrl' | 'editWhisperCmd' | 'editWhisperModel' | 'message';
+type Mode =
+  | 'browse'
+  | 'editAllow'
+  | 'editBehavior'
+  | 'editModel'
+  | 'editBaseUrl'
+  | 'editWhisperCmd'
+  | 'editWhisperModel'
+  | 'editToolApproval'
+  | 'message';
 
 export const ConfigMenu = () => {
   const {exit} = useApp();
@@ -29,7 +38,15 @@ export const ConfigMenu = () => {
       if (key.return || key.escape) exit();
       return;
     }
-    if (mode === 'editAllow' || mode === 'editBehavior' || mode === 'editModel' || mode === 'editBaseUrl' || mode === 'editWhisperCmd' || mode === 'editWhisperModel') {
+    if (
+      mode === 'editAllow' ||
+      mode === 'editBehavior' ||
+      mode === 'editModel' ||
+      mode === 'editBaseUrl' ||
+      mode === 'editWhisperCmd' ||
+      mode === 'editWhisperModel' ||
+      mode === 'editToolApproval'
+    ) {
       if (key.return) {
         const val = input.trim();
         setInput('');
@@ -53,6 +70,11 @@ export const ConfigMenu = () => {
           } else if (mode === 'editWhisperModel') {
             const next = {...cfg, audio: {...cfg.audio, whisper: {...cfg.audio.whisper, model: val}}};
             setCfg(next);
+          } else if (mode === 'editToolApproval') {
+            if (!cfg.tools.requireApproval.includes(val)) {
+              const next = {...cfg, tools: {...cfg.tools, requireApproval: [...cfg.tools.requireApproval, val]}};
+              setCfg(next);
+            }
           }
         }
         return;
@@ -112,22 +134,42 @@ export const ConfigMenu = () => {
       setInput('');
       return;
     }
+    if (ch === 't' || ch === 'T') {
+      setMode('editToolApproval');
+      setInput('');
+      return;
+    }
     if (ch === 'e' || ch === 'E') {
       setMode('editBehavior');
       setInput(cfg.linger.behavior);
       return;
     }
-    if ((ch === 'd' || ch === 'D') && items[index]?.kind === 'allow') {
-      const idx = (items[index] as any).idx as number;
-      const next = {
-        ...cfg,
-        shell: {
-          ...cfg.shell,
-          extraAllowlist: cfg.shell.extraAllowlist.filter((_, i) => i !== idx),
-        },
-      };
-      setCfg(next);
-      return;
+    if (ch === 'd' || ch === 'D') {
+      const it = items[index];
+      if (it?.kind === 'allow') {
+        const idx = (items[index] as any).idx as number;
+        const next = {
+          ...cfg,
+          shell: {
+            ...cfg.shell,
+            extraAllowlist: cfg.shell.extraAllowlist.filter((_, i) => i !== idx),
+          },
+        };
+        setCfg(next);
+        return;
+      }
+      if (it?.kind === 'approval') {
+        const idx = (items[index] as any).idx as number;
+        const next = {
+          ...cfg,
+          tools: {
+            ...cfg.tools,
+            requireApproval: cfg.tools.requireApproval.filter((_, i) => i !== idx),
+          },
+        };
+        setCfg(next);
+        return;
+      }
     }
     if (key.leftArrow || ch === 'h' || ch === 'H') {
       const it = items[index];
@@ -146,7 +188,7 @@ export const ConfigMenu = () => {
   return (
     <Box flexDirection="column">
       <Text color="cyan">⚙️ GSIO Config</Text>
-      <Text color="gray">↑/↓ select • Space toggle • ←/→ adjust • a add allow • d delete • e edit behavior • s save • Esc exit</Text>
+      <Text color="gray">↑/↓ select • Space toggle • ←/→ adjust • a add allow • t add approval • d delete • e edit behavior • s save • Esc exit</Text>
       <Newline />
       {items.map((it, i) => (
         <Text key={`${it.key}-${i}`} color={i === index ? 'magenta' : undefined}>
@@ -188,6 +230,12 @@ export const ConfigMenu = () => {
         <>
           <Newline />
           <Text color="yellow">Edit linger behavior: {input}_</Text>
+        </>
+      )}
+      {mode === 'editToolApproval' && (
+        <>
+          <Newline />
+          <Text color="yellow">Add tool requiring approval: {input}_</Text>
         </>
       )}
       {mode === 'message' && msg && (
@@ -290,6 +338,10 @@ export const ConfigMenu = () => {
     out.push({ key: 'allow.header', label: 'Shell allowlist (press a to add, d to delete)', kind: 'header' });
     for (let i = 0; i < c.shell.extraAllowlist.length; i++) {
       out.push({ key: `allow.${i}`, label: `  - ${c.shell.extraAllowlist[i]}`, kind: 'allow', idx: i });
+    }
+    out.push({ key: 'approval.header', label: 'Tools requiring approval (press t to add, d to delete)', kind: 'header' });
+    for (let i = 0; i < c.tools.requireApproval.length; i++) {
+      out.push({ key: `approval.${i}`, label: `  - ${c.tools.requireApproval[i]}`, kind: 'approval', idx: i });
     }
     return out;
   }

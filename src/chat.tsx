@@ -1,6 +1,13 @@
 import React, {useState} from 'react';
 import {Box, Newline, Text, useInput, useStdout} from 'ink';
-import {Agent, run, type StreamedRunResult} from '@openai/agents';
+import {
+  Agent,
+  run,
+  type StreamedRunResult,
+  type RunStreamEvent,
+  type RunToolApprovalItem,
+  type RunState,
+} from '@openai/agents';
 import {defaultTools} from './tools.js';
 import {listTodos, shortList, getFocus} from './todoStore.js';
 import {loadConfig, saveConfig} from './config.js';
@@ -12,6 +19,15 @@ import {summarizeAudioContext} from './summarizer.js';
 type Message = {
 	role: 'user' | 'assistant';
 	content: string;
+};
+
+type PendingInterruption = {
+  id: string;
+  toolName: string;
+  summary: string | null;
+  source: 'chat' | 'linger';
+  state: RunState<any, any>;
+  item: RunToolApprovalItem;
 };
 
 type ChatProps = { debug?: boolean };
@@ -27,6 +43,8 @@ export const Chat = ({debug = false}: ChatProps) => {
   const rightWidthRef = React.useRef<number>(initRightWidth);
   const rightWidth = rightWidthRef.current;
   const LOGS_HEIGHT = 12; // fixed-height logs viewport
+  const APPROVALS_HEIGHT = 6;
+  const EVENT_LOGS_HEIGHT = 10;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -45,18 +63,15 @@ export const Chat = ({debug = false}: ChatProps) => {
   const [audioLogs, setAudioLogs] = useState<string[]>([]);
   const [audioStatus, setAudioStatus] = useState<string>('idle');
   const [audioMetrics, setAudioMetrics] = useState<CaptureMetrics | null>(null);
+  const [eventLogs, setEventLogs] = useState<string[]>([]);
+  const [pendingInterruptions, setPendingInterruptions] = useState<PendingInterruption[]>([]);
+  const [pendingIndex, setPendingIndex] = useState<number>(0);
   const stopAudioRef = React.useRef<null | (() => void)>(null);
   const [lingerEnabled, setLingerEnabled] = useState<boolean>(false);
   const [lingerBehavior, setLingerBehavior] = useState<string>('');
   const [lingerIntervalSec, setLingerIntervalSec] = useState<number>(20);
   const lastLingerRef = React.useRef<number>(0);
 
-  const appendAudioLog = React.useCallback((msg: string) => {
-    const ts = new Date().toLocaleTimeString();
-    setAudioLogs((logs) => [...logs, `${ts} — ${msg}`].slice(-100));
-  }, []);
-
-  // Build agent based on config flags
   const agent = React.useMemo(() => {
     const audioLine = audioEnabled
       ? 'Audio context capture is enabled; prefer incorporating relevant auditory information if provided.'
@@ -87,6 +102,208 @@ export const Chat = ({debug = false}: ChatProps) => {
       tools: defaultTools,
     });
   }, [audioEnabled, audioSummary]);
+
+  const appendAudioLog = React.useCallback((msg: string) => {
+    const ts = new Date().toLocaleTimeString();
+    setAudioLogs((logs) => [...logs, `${ts} — ${msg}`].slice(-100));
+  }, []);
+
+  const appendEventLog = React.useCallback((source: 'chat' | 'linger', detail: string) => {
+    const ts = new Date().toLocaleTimeString();
+    setEventLogs((logs) => [...logs, `${ts} [${source}] ${detail}`].slice(-200));
+  }, []);
+
+  const pendingRef = React.useRef<PendingInterruption[]>([]);
+  React.useEffect(() => {
+    pendingRef.current = pendingInterruptions;
+  }, [pendingInterruptions]);
+
+  const prevPendingCountRef = React.useRef<number>(0);
+  React.useEffect(() => {
+    const prev = prevPendingCountRef.current;
+    const cur = pendingInterruptions.length;
+    if (prev === 0 && cur > 0) {
+      setPendingIndex(0);
+    } else if (cur === 0 && pendingIndex !== 0) {
+      setPendingIndex(0);
+    } else if (cur > 0 && pendingIndex >= cur) {
+      setPendingIndex(cur - 1);
+    }
+    prevPendingCountRef.current = cur;
+  }, [pendingInterruptions, pendingIndex]);
+
+  const logStreamEvent = React.useCallback(
+    (source: 'chat' | 'linger', event: RunStreamEvent) => {
+      if (event.type === 'run_item_stream_event') {
+        const {name} = event;
+        const item: any = event.item;
+        const raw: any = item?.rawItem;
+        const agentName: string | undefined = item?.agent?.name;
+        const actorPrefix = agentName ? `${agentName}: ` : '';
+        if (name === 'tool_called') {
+          const toolName = raw?.name ?? raw?.action?.type ?? 'unknown_tool';
+          const args = formatEventArgs(raw);
+          appendEventLog(source, `${actorPrefix}tool_called ${toolName}${args ? ` args=${args}` : ''}`);
+          return;
+        }
+        if (name === 'tool_output') {
+          const toolName = raw?.name ?? raw?.action?.type ?? 'unknown_tool';
+          const output = formatEventOutput(raw);
+          appendEventLog(source, `${actorPrefix}tool_output ${toolName}${output ? ` → ${output}` : ''}`);
+          return;
+        }
+        if (name === 'tool_approval_requested') {
+          const toolName = raw?.name ?? raw?.action?.type ?? 'unknown_tool';
+          appendEventLog(source, `${actorPrefix}tool_approval_requested ${toolName}`);
+          return;
+        }
+        if (name === 'handoff_requested') {
+          appendEventLog(source, `${actorPrefix}handoff_requested`);
+          return;
+        }
+        if (name === 'handoff_occurred') {
+          appendEventLog(source, `${actorPrefix}handoff_occurred`);
+          return;
+        }
+        if (name === 'reasoning_item_created') {
+          appendEventLog(source, `${actorPrefix}reasoning_item_created`);
+          return;
+        }
+        if (name === 'message_output_created') {
+          appendEventLog(source, `${actorPrefix}message_output_created`);
+          return;
+        }
+      } else if (event.type === 'agent_updated_stream_event') {
+        appendEventLog(source, `agent_updated ${event.agent?.name ?? 'unknown_agent'}`);
+      } else if (event.type === 'raw_model_stream_event') {
+        const kind = (event.data as any)?.type;
+        if (kind && kind !== 'output_text_delta') {
+          appendEventLog(source, `raw_model_event ${kind}`);
+        }
+      }
+    },
+    [appendEventLog],
+  );
+
+  const consumeStream = React.useCallback(
+    async (stream: StreamedRunResult<any, any>, source: 'chat' | 'linger') => {
+      let full = '';
+      for await (const event of stream) {
+        logStreamEvent(source, event);
+        if (event.type === 'raw_model_stream_event' && event.data?.type === 'output_text_delta') {
+          const delta = event.data.delta;
+          if (delta) {
+            full += delta;
+            setResponse(full);
+          }
+        } else if ((event as any).type === 'output_text_delta' && (event as any).delta) {
+          const delta = (event as any).delta as string;
+          full += delta;
+          setResponse(full);
+        }
+      }
+      return full;
+    },
+    [logStreamEvent],
+  );
+
+  const handleInterruptions = React.useCallback(
+    (source: 'chat' | 'linger', interruptions: RunToolApprovalItem[] | undefined, state: RunState<any, any>) => {
+      if (!interruptions || interruptions.length === 0) return;
+      const entries: PendingInterruption[] = interruptions.map((item) => {
+        const raw: any = item?.rawItem;
+        const toolName = raw?.name ?? raw?.action?.type ?? 'unknown_tool';
+        const summary = formatEventArgs(raw) ?? formatEventOutput(raw);
+        const idSeed = raw?.callId ?? raw?.id ?? `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        return {
+          id: String(idSeed),
+          toolName,
+          summary: summary ?? null,
+          source,
+          state,
+          item,
+        };
+      });
+      setPendingInterruptions((prev) => [...prev, ...entries]);
+      appendEventLog(source, `interruption_pending ${entries.map((e) => e.toolName).join(', ')}`);
+    },
+    [appendEventLog],
+  );
+
+  const resumeStream = React.useCallback(
+    async (state: RunState<any, any>, source: 'chat' | 'linger') => {
+      setIsStreaming(true);
+      setResponse('');
+      let stream: StreamedRunResult<any, any> | null = null;
+      try {
+        stream = await run(agent, state, {stream: true});
+        const full = await consumeStream(stream, source);
+        if (stream.interruptions?.length) {
+          handleInterruptions(source, stream.interruptions as RunToolApprovalItem[], stream.state);
+        }
+        setMessages((m: Message[]) => [...m, {role: 'assistant', content: full || '(no response)'}]);
+      } catch (err: any) {
+        const msg = err?.message || 'Unknown error';
+        appendEventLog(source, `error ${msg}`);
+        setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Error: ${msg}`}]);
+        setResponse(`Error: ${msg}`);
+      } finally {
+        setIsStreaming(false);
+        refreshTodos().catch(() => {});
+        if (stream?.error) {
+          appendEventLog(source, `stream_error ${String(stream.error)}`);
+        } else if (stream) {
+          appendEventLog(source, 'stream_complete');
+        }
+      }
+    },
+    [agent, consumeStream, appendEventLog, handleInterruptions],
+  );
+
+  const handlePendingDecision = React.useCallback(
+    async (action: 'approve' | 'reject', always: boolean) => {
+      if (pendingInterruptions.length === 0) return;
+      const idx = Math.max(0, Math.min(pendingIndex, pendingInterruptions.length - 1));
+      const target = pendingInterruptions[idx];
+      if (!target) return;
+
+      try {
+        if (action === 'approve') {
+          target.state.approve(target.item, {alwaysApprove: always});
+          setMessages((m: Message[]) => [
+            ...m,
+            {role: 'user', content: `[approval] Approved ${target.toolName}${always ? ' (always)' : ''}`},
+          ]);
+          appendEventLog(target.source, `approval_granted ${target.toolName}${always ? ' (always)' : ''}`);
+        } else {
+          target.state.reject(target.item, {alwaysReject: always});
+          setMessages((m: Message[]) => [
+            ...m,
+            {role: 'user', content: `[approval] Rejected ${target.toolName}${always ? ' (always)' : ''}`},
+          ]);
+          appendEventLog(target.source, `approval_rejected ${target.toolName}${always ? ' (always)' : ''}`);
+        }
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        appendEventLog(target.source, `approval_error ${msg}`);
+        setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Approval error: ${msg}`}]);
+        return;
+      }
+
+      const nextList = pendingInterruptions.filter((_, i) => i !== idx);
+      setPendingInterruptions(nextList);
+      setPendingIndex((prev) => {
+        if (nextList.length === 0) return 0;
+        return Math.max(0, Math.min(prev, nextList.length - 1));
+      });
+
+      const stillPendingForState = nextList.some((entry) => entry.state === target.state);
+      if (!stillPendingForState) {
+        await resumeStream(target.state, target.source);
+      }
+    },
+    [appendEventLog, pendingInterruptions, pendingIndex, resumeStream],
+  );
 
   const clampCursor = (pos: number, s: string = input) =>
     Math.max(0, Math.min(pos, s.length));
@@ -159,7 +376,29 @@ export const Chat = ({debug = false}: ChatProps) => {
       );
       setLastAction('(none)');
     }
-    // Toggle audio capture: Alt/Meta + A
+    if (key.meta && pendingInterruptions.length > 0) {
+      if (inputKey === '[' || inputKey === '{') {
+        setPendingIndex((prev) => Math.max(0, prev - 1));
+        if (debug) setLastAction('pending: prev');
+        return;
+      }
+      if (inputKey === ']' || inputKey === '}') {
+        setPendingIndex((prev) => Math.min(pendingInterruptions.length - 1, prev + 1));
+        if (debug) setLastAction('pending: next');
+        return;
+      }
+      if (inputKey === 'y' || inputKey === 'Y') {
+        handlePendingDecision('approve', key.shift || inputKey === 'Y').catch(() => {});
+        if (debug) setLastAction('pending: approve');
+        return;
+      }
+      if (inputKey === 'n' || inputKey === 'N') {
+        handlePendingDecision('reject', key.shift || inputKey === 'N').catch(() => {});
+        if (debug) setLastAction('pending: reject');
+        return;
+      }
+    }
+    // Toggle audio capture: Option/Alt (Meta) + A
     if (key.meta && (inputKey === 'a' || inputKey === 'A')) {
       (async () => {
         try {
@@ -323,52 +562,39 @@ export const Chat = ({debug = false}: ChatProps) => {
     }
   });
 
-	// Stream response from OpenAI
-	const streamResponse = async (chatHistory: Message[]) => {
-		setIsStreaming(true);
-		setResponse('');
+  // Stream response from OpenAI
+  const streamResponse = async (chatHistory: Message[]) => {
+    setIsStreaming(true);
+    setResponse('');
 
-		// Get the last user message
-		const lastMessage = chatHistory[chatHistory.length - 1]?.content || '';
+    const lastMessage = chatHistory[chatHistory.length - 1]?.content || '';
+    let stream: StreamedRunResult<any, any> | null = null;
 
-		try {
-			const stream: StreamedRunResult<any, any> = await run(agent, lastMessage, {
-				stream: true,
-			});
-
-			// Iterate through streaming events to collect text in realtime
-			let fullResponse = '';
-			for await (const event of stream) {
-				// Stream model text deltas (Responses API wrapped) or direct deltas (Chat Completions adapter)
-				if (event.type === 'raw_model_stream_event' && event.data?.type === 'output_text_delta') {
-					const delta = event.data.delta;
-					if (delta) {
-						fullResponse += delta;
-						setResponse(fullResponse);
-					}
-				} else if ((event as any).type === 'output_text_delta' && (event as any).delta) {
-					const delta = (event as any).delta as string;
-					fullResponse += delta;
-					setResponse(fullResponse);
-				}
-			}
-
-			// Add the complete response to message history
-			// @ts-ignore
-			setMessages([
-				...chatHistory,
-				{role: 'assistant', content: fullResponse || '(no response)'},
-			]);
-		} catch (err: any) {
-			const msg = err?.message || 'Unknown error';
-			// @ts-ignore
-			setMessages([...chatHistory, {role: 'assistant', content: `Error: ${msg}`}]);
-			setResponse(`Error: ${msg}`);
-		} finally {
-			setIsStreaming(false);
-			refreshTodos().catch(() => {});
-		}
-	};
+    try {
+      stream = await run(agent, lastMessage, {stream: true});
+      const fullResponse = await consumeStream(stream, 'chat');
+      if (stream.interruptions?.length) {
+        handleInterruptions('chat', stream.interruptions as RunToolApprovalItem[], stream.state);
+      }
+      setMessages([
+        ...chatHistory,
+        {role: 'assistant', content: fullResponse || '(no response)'},
+      ] as any);
+    } catch (err: any) {
+      const msg = err?.message || 'Unknown error';
+      setMessages([...chatHistory, {role: 'assistant', content: `Error: ${msg}`}]);
+      setResponse(`Error: ${msg}`);
+      appendEventLog('chat', `error ${msg}`);
+    } finally {
+      setIsStreaming(false);
+      refreshTodos().catch(() => {});
+      if (stream?.error) {
+        appendEventLog('chat', `stream_error ${String(stream.error)}`);
+      } else if (stream) {
+        appendEventLog('chat', 'stream_complete');
+      }
+    }
+  };
 
   async function refreshTodos() {
     try {
@@ -453,31 +679,31 @@ export const Chat = ({debug = false}: ChatProps) => {
   async function runLinger(latestUtterance: string) {
     const instruction = `Linger mode is enabled. Behavior directive from user: ${lingerBehavior}\n\nRecent audio summary: ${audioSummary || '(none)'}\nLatest utterance: ${latestUtterance}\n\nDecide if any helpful action is warranted. If yes, act concisely (use tools when needed) and keep changes minimal and safe. If no action is valuable, reply briefly or remain silent.`;
     const newMessages = [...messages, {role: 'user' as const, content: instruction}];
-    // Stream like a normal response
     setMessages(newMessages as any);
     setIsStreaming(true);
     setResponse('');
+
+    let stream: StreamedRunResult<any, any> | null = null;
     try {
-      const stream: StreamedRunResult<any, any> = await run(agent, instruction, { stream: true });
-      let full = '';
-      for await (const event of stream) {
-        if (event.type === 'raw_model_stream_event' && event.data?.type === 'output_text_delta') {
-          const d = event.data.delta;
-          if (d) {
-            full += d;
-            setResponse(full);
-          }
-        } else if ((event as any).type === 'output_text_delta' && (event as any).delta) {
-          const d = (event as any).delta as string;
-          full += d;
-          setResponse(full);
-        }
+      stream = await run(agent, instruction, {stream: true});
+      const full = await consumeStream(stream, 'linger');
+      if (stream.interruptions?.length) {
+        handleInterruptions('linger', stream.interruptions as RunToolApprovalItem[], stream.state);
       }
-      // append assistant output
       setMessages((m: Message[]) => [...m, {role: 'assistant', content: full || '(no response)'}]);
+    } catch (err: any) {
+      const msg = err?.message || 'Unknown error';
+      appendEventLog('linger', `error ${msg}`);
+      setMessages((m: Message[]) => [...m, {role: 'assistant', content: `Linger error: ${msg}`}]);
+      setResponse(`Error: ${msg}`);
     } finally {
       setIsStreaming(false);
-      refreshTodos().catch(()=>{});
+      refreshTodos().catch(() => {});
+      if (stream?.error) {
+        appendEventLog('linger', `stream_error ${String(stream.error)}`);
+      } else if (stream) {
+        appendEventLog('linger', 'stream_complete');
+      }
     }
   }
 
@@ -487,49 +713,53 @@ export const Chat = ({debug = false}: ChatProps) => {
   return (
     <Box flexDirection="row">
       <Box flexDirection="column" flexGrow={1}>
-        <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline, Alt+A: audio)</Text>
-        <Newline />
-        {todoPanel && (
-          <>
-            <Text color="gray">TODOs {focused ? `(focus: #${focused})` : ''}</Text>
-            <Text color="gray">{todoPanel}</Text>
-            <Newline />
-          </>
-        )}
-        {audioEnabled && (
-          <>
-            <Text color="gray">Audio context: enabled{audioSummary ? ' — summarized' : ''} {lingerEnabled ? '• Linger on' : ''}</Text>
-            <Newline />
-          </>
-        )}
-        {messages.map((msg, i) => (
-          <Box key={i} flexDirection="column" marginBottom={1}>
-            <Text color={msg.role === 'user' ? 'green' : 'yellow'}>
-              {msg.role === 'user' ? 'You: ' : 'AI: '}
-              {msg.content}
-            </Text>
-          </Box>
-        ))}
+        <Box flexDirection="column" flexShrink={0} marginBottom={1}>
+          <Text color="cyan">🧠 GSIO (Enter: send, Shift+Enter: newline, Option/Alt+A: audio)</Text>
+          <Newline />
+          {todoPanel && (
+            <>
+              <Text color="gray">TODOs {focused ? `(focus: #${focused})` : ''}</Text>
+              <Text color="gray">{todoPanel}</Text>
+              <Newline />
+            </>
+          )}
+          {audioEnabled && (
+            <>
+              <Text color="gray">Audio context: enabled{audioSummary ? ' — summarized' : ''} {lingerEnabled ? '• Linger on' : ''}</Text>
+              <Newline />
+            </>
+          )}
+        </Box>
+        <Box flexDirection="column" flexGrow={1}>
+          {messages.map((msg, i) => (
+            <Box key={i} flexDirection="column" marginBottom={1}>
+              <Text color={msg.role === 'user' ? 'green' : 'yellow'}>
+                {msg.role === 'user' ? 'You: ' : 'AI: '}
+                {msg.content}
+              </Text>
+            </Box>
+          ))}
 
-        {isStreaming && <Text color="yellow">{response}</Text>}
+          {isStreaming && <Text color="yellow">{response}</Text>}
+        </Box>
+        <Box flexDirection="column" flexShrink={0} marginTop={1}>
+          <Text>
+            <Text color="magenta">{'>'}</Text>{' '}
+            {left}
+            <Text color="magenta">|</Text>
+            {right}
+          </Text>
 
-        <Newline />
-        <Text>
-          <Text color="magenta">{'>'}</Text>{' '}
-          {left}
-          <Text color="magenta">|</Text>
-          {right}
-        </Text>
-
-        {debug && (
-          <>
-            <Newline />
-            <Text color="gray">[debug] input: {lastInput}</Text>
-            <Text color="gray">[debug] flags: {lastFlags}</Text>
-            <Text color="gray">[debug] action: {lastAction}</Text>
-            <Text color="gray">[debug] cursor: {cursor}/{input.length}</Text>
-          </>
-        )}
+          {debug && (
+            <>
+              <Newline />
+              <Text color="gray">[debug] input: {lastInput}</Text>
+              <Text color="gray">[debug] flags: {lastFlags}</Text>
+              <Text color="gray">[debug] action: {lastAction}</Text>
+              <Text color="gray">[debug] cursor: {cursor}/{input.length}</Text>
+            </>
+          )}
+        </Box>
       </Box>
       <Box flexDirection="column" width={rightWidth} marginLeft={rightMargin}>
         {audioEnabled && (
@@ -573,6 +803,58 @@ export const Chat = ({debug = false}: ChatProps) => {
             <Newline />
           </>
         )}
+        {pendingInterruptions.length > 0 && (
+          <>
+            <Text color="gray">
+              Pending Approvals (Option/Alt+[ / Option/Alt+] select, Option/Alt+Y approve, Option/Alt+Shift+Y always, Option/Alt+N reject, Option/Alt+Shift+N always)
+            </Text>
+            <Box flexDirection="column" height={APPROVALS_HEIGHT} flexShrink={0}>
+              {(() => {
+                const maxLines = APPROVALS_HEIGHT;
+                const omitted = Math.max(0, pendingInterruptions.length - maxLines);
+                const visible = pendingInterruptions.slice(-Math.max(0, maxLines - (omitted > 0 ? 1 : 0)));
+                return (
+                  <>
+                    {omitted > 0 && <Text color="gray">… {omitted} more</Text>}
+                    {visible.map((entry, idx) => {
+                      const startIndex = pendingInterruptions.length - visible.length;
+                      const absoluteIdx = startIndex + idx;
+                      const isSelected = pendingIndex === absoluteIdx;
+                      const prefix = isSelected ? '» ' : '  ';
+                      const summary = entry.summary ? ` — ${entry.summary}` : '';
+                      const text = `${entry.toolName}${summary} (${entry.source})`;
+                      return (
+                        <Text key={`${entry.id}-${idx}`} color={isSelected ? 'magenta' : 'gray'}>
+                          {prefix}
+                          {truncateForPanel(text, rightWidth)}
+                        </Text>
+                      );
+                    })}
+                  </>
+                );
+              })()}
+            </Box>
+            <Newline />
+          </>
+        )}
+        <Text color="gray">Run Events</Text>
+        <Box flexDirection="column" height={EVENT_LOGS_HEIGHT} flexShrink={0}>
+          {(() => {
+            if (eventLogs.length === 0) return <Text color="gray">(no events yet)</Text>;
+            const maxLines = EVENT_LOGS_HEIGHT;
+            const omitted = Math.max(0, eventLogs.length - maxLines);
+            const visible = eventLogs.slice(-Math.max(0, maxLines - (omitted > 0 ? 1 : 0)));
+            return (
+              <>
+                {omitted > 0 && <Text color="gray">… {omitted} more</Text>}
+                {visible.map((line, idx) => (
+                  <Text key={idx} color="gray">- {truncateForPanel(line, rightWidth)}</Text>
+                ))}
+              </>
+            );
+          })()}
+        </Box>
+        <Newline />
         <Text color="gray">Tokens</Text>
         <Text color="gray">- Input: ~{estimateTokens(input)}</Text>
         <Text color="gray">- Messages: ~{messages.reduce((sum, m) => sum + estimateTokens(m.content), 0)}</Text>
@@ -605,6 +887,45 @@ function estimateTokens(text: string): number {
   const chars = text.replace(/\s+/g, ' ').trim().length;
   if (chars === 0) return 0;
   return Math.max(1, Math.ceil(chars / 4));
+}
+
+function formatEventArgs(raw: any): string | null {
+  if (!raw) return null;
+  const value =
+    typeof raw.arguments === 'string'
+      ? raw.arguments
+      : raw.arguments
+        ? JSON.stringify(raw.arguments)
+        : raw.action
+          ? JSON.stringify(raw.action)
+          : undefined;
+  if (!value) return null;
+  return truncateText(value);
+}
+
+function formatEventOutput(raw: any): string | null {
+  if (!raw) return null;
+  const output = raw.output ?? raw.providerData?.output;
+  if (!output) return null;
+  if (typeof output === 'string') {
+    return truncateText(output);
+  }
+  if (typeof output === 'object') {
+    if (typeof output.text === 'string') {
+      return truncateText(output.text);
+    }
+    if (typeof output.data === 'string') {
+      return `[data ${output.data.length}b]`;
+    }
+  }
+  return truncateText(JSON.stringify(output));
+}
+
+function truncateText(s: string, max = 80): string {
+  if (!s) return '';
+  const normalized = s.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max - 1)}…`;
 }
 
 function truncateForPanel(s: string, width: number): string {
