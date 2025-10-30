@@ -8,13 +8,13 @@ import {
 	type RunToolApprovalItem,
 	type RunState,
 } from "@openai/agents";
-import { defaultTools } from "./tools.js";
-import { listTodos, shortList, getFocus } from "./todoStore.js";
-import { loadConfig, saveConfig, type AppConfig } from "./config.js";
-import { startContinuousCapture, type CaptureMetrics } from "./audio.js";
-import { summarizeAudioContext } from "./summarizer.js";
-import { UserInput } from "./userInput.js";
-import { Markdown } from "./markdown.js";
+import { defaultTools } from "./tools";
+import { listTodos, shortList, getFocus } from "./todoStore";
+import { loadConfig, saveConfig, type AppConfig } from "./config";
+import { startContinuousCapture, type CaptureMetrics } from "./audio";
+import { summarizeAudioContext } from "./summarizer";
+import { UserInput } from "./userInput";
+import { Markdown } from "./markdown";
 import LLMMemory, {
 	type Message as MemoryMessage,
 } from "@ai-seemueller-io/llm-memory";

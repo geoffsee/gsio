@@ -1,6 +1,6 @@
 {
 	"name": "gsio",
-	"version": "0.2.0",
+	"version": "0.2.1-alpha",
 	"license": "MIT",
 	"bin": "dist/cli.js",
 	"workspaces": ["packages/llm-memory"],

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { UnstorageAdapter } from '../src/store.js';
-import { MemoryEntry } from '../src/types.js';
-import { createMockStorage, createThrowingStorage } from './mocks.js';
+import { UnstorageAdapter } from '../src/store';
+import { MemoryEntry } from '../src/types';
+import { createMockStorage, createThrowingStorage } from './mocks';
 
 describe('UnstorageAdapter', () => {
   let adapter: UnstorageAdapter;

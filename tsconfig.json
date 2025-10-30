@@ -1,6 +1,8 @@
 {
 	"compilerOptions": {
-		"outDir": "dist"
+		"outDir": "dist",
+		"jsx": "preserve",
+		"moduleResolution": "bundler"
 	},
 	"include": ["src"]
 }

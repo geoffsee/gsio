@@ -3,7 +3,8 @@ import { z } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
+import OpenAI from "openai";
 import {
 	addTodo,
 	listTodos,
@@ -18,7 +19,7 @@ import {
 	linkDependency,
 	unlinkDependency,
 	setFocus,
-} from "./todoStore.js";
+} from "./todoStore";
 
 const needsApprovalFor = (toolName: string) => {
 	return async (_ctx?: unknown, _input?: unknown, _callId?: string) => {
@@ -30,6 +31,96 @@ const needsApprovalFor = (toolName: string) => {
 		}
 	};
 };
+
+const TEXT_EXTENSIONS = new Set([
+	".txt",
+	".text",
+	".md",
+	".markdown",
+	".json",
+	".yaml",
+	".yml",
+	".csv",
+	".tsv",
+	".log",
+	".xml",
+	".html",
+	".htm",
+	".css",
+	".scss",
+	".less",
+	".js",
+	".jsx",
+	".ts",
+	".tsx",
+	".cjs",
+	".mjs",
+	".c",
+	".cpp",
+	".h",
+	".hpp",
+	".py",
+	".rb",
+	".rs",
+	".go",
+	".java",
+	".php",
+	".sh",
+	".bash",
+	".zsh",
+	".fish",
+	".ps1",
+	".bat",
+	".ini",
+	".cfg",
+	".conf",
+	".toml",
+	".sql",
+	".r",
+	".scala",
+	".swift",
+	".kt",
+	".dart",
+]);
+
+const PANDOC_EXTENSIONS = new Set([
+	".pdf",
+	".doc",
+	".docx",
+	".ppt",
+	".pptx",
+	".rtf",
+	".odt",
+	".odp",
+	".ods",
+	".epub",
+]);
+
+const VISION_EXTENSIONS = new Set([
+	".pdf",
+	".doc",
+	".docx",
+	".ppt",
+	".pptx",
+	".rtf",
+	".odt",
+	".epub",
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".bmp",
+	".webp",
+	".tif",
+	".tiff",
+	".heic",
+	".heif",
+]);
+
+const MAX_PANDOC_INPUT_BYTES = 25 * 1024 * 1024; // 25MB
+const MAX_VISION_INPUT_BYTES = 10 * 1024 * 1024; // 10MB
+const VISION_EXTRACTION_PROMPT =
+	"Extract the readable textual content from the attached file. Return plain text that preserves logical structure (headings, paragraphs, lists, and tables) using simple formatting. If the document is primarily images, transcribe any legible text.";
 
 // Calculator tool with simple, safe evaluation
 export const calculatorTool = tool({
@@ -55,29 +146,302 @@ export const calculatorTool = tool({
 	},
 });
 
+export async function readFileAsText(
+	p: string,
+	maxBytes: number
+): Promise<string> {
+	if (!p || typeof p !== "string") {
+		throw new Error("Path is required.");
+	}
+	if (
+		typeof maxBytes !== "number" ||
+		!Number.isFinite(maxBytes) ||
+		maxBytes <= 0
+	) {
+		throw new Error("maxBytes must be a positive integer.");
+	}
+	const abs = path.resolve(process.cwd(), p);
+	if (!withinCwd(abs)) {
+		throw new Error("Access outside the working directory is not allowed.");
+	}
+	let stat: Awaited<ReturnType<typeof fs.stat>>;
+	try {
+		stat = await fs.stat(abs);
+	} catch (err: any) {
+		throw new Error(`Unable to access file: ${err?.message || String(err)}`);
+	}
+	if (!stat.isFile()) {
+		throw new Error("Path must reference a file, not a directory.");
+	}
+
+	const ext = path.extname(abs).toLowerCase();
+	const baseName = path.basename(abs);
+	const isTextish = !ext || TEXT_EXTENSIONS.has(ext);
+	const pandocCandidate = PANDOC_EXTENSIONS.has(ext);
+	const visionCandidate = VISION_EXTENSIONS.has(ext);
+	const convertible = pandocCandidate || visionCandidate;
+
+	let directReadIssue: string | null = null;
+	if (stat.size <= maxBytes) {
+		try {
+			const raw = await fs.readFile(abs, "utf8");
+			if (isLikelyText(raw)) {
+				return truncateUtf8(raw, maxBytes);
+			}
+			directReadIssue = "content is not recognizable as plain UTF-8 text";
+		} catch (err: any) {
+			directReadIssue = err?.message || String(err);
+		}
+	} else if (isTextish && !convertible) {
+		throw new Error(
+			`File too large: ${formatBytes(stat.size)} (max ${formatBytes(
+				maxBytes
+			)})`
+		);
+	}
+
+	if (!convertible) {
+		if (directReadIssue) {
+			throw new Error(
+				`Unsupported binary file format (${ext || "no extension"}): ${
+					directReadIssue || "unable to decode as text"
+				}`
+			);
+		}
+		throw new Error(
+			`Unsupported file type: ${ext || "no extension"}. Provide text input or a convertible document.`
+		);
+	}
+
+	let pandocError: string | null = null;
+	if (pandocCandidate) {
+		if (stat.size > MAX_PANDOC_INPUT_BYTES) {
+			pandocError = `input exceeds ${formatBytes(
+				MAX_PANDOC_INPUT_BYTES
+			)} pandoc limit`;
+		} else {
+			try {
+				const converted = await convertWithPandoc(abs, baseName, maxBytes);
+				if (converted) {
+					return converted;
+				}
+			} catch (err: any) {
+				pandocError = err?.message || String(err);
+			}
+		}
+	}
+
+	let visionError: string | null = null;
+	if (visionCandidate || (pandocCandidate && pandocError)) {
+		try {
+			const converted = await convertWithVision(
+				abs,
+				baseName,
+				maxBytes,
+				stat.size
+			);
+			if (converted) {
+				return converted;
+			}
+		} catch (err: any) {
+			visionError = err?.message || String(err);
+		}
+	}
+
+	const reasonParts = [
+		directReadIssue ? `direct read: ${directReadIssue}` : null,
+		pandocError ? `pandoc: ${pandocError}` : null,
+		visionError ? `vision: ${visionError}` : null,
+	].filter(Boolean) as string[];
+	const combined =
+		reasonParts.length > 0 ? ` (${truncateReason(reasonParts.join("; "))})` : "";
+	throw new Error(`Unable to extract text from ${baseName}${combined}`);
+}
+
 // Read small text files from within the current working directory
 export const readFileTool = tool({
 	name: "read_file",
 	description:
-		"Read a small UTF-8 text file relative to the current working directory.",
+		"Read a UTF-8 text file or convert supported documents (PDF, Office, images) within the current working directory.",
 	parameters: z.object({
 		path: z.string().min(1, "path required"),
 		maxBytes: z.number().int().positive().max(200_000).default(50_000),
 	}),
 	needsApproval: needsApprovalFor("read_file"),
 	async execute({ path: p, maxBytes }) {
-		const abs = path.resolve(process.cwd(), p);
-		if (!abs.startsWith(process.cwd())) {
-			throw new Error("Access outside the working directory is not allowed.");
-		}
-		const stat = await fs.stat(abs);
-		if (stat.size > maxBytes) {
-			throw new Error(`File too large: ${stat.size} bytes (max ${maxBytes}).`);
-		}
-		const data = await fs.readFile(abs, "utf8");
-		return data;
+		return await readFileAsText(p, maxBytes);
 	},
 });
+
+function truncateReason(text: string, limit = 280): string {
+	if (text.length <= limit) return text;
+	return `${text.slice(0, limit - 3)}...`;
+}
+
+function truncateUtf8(text: string, maxBytes: number): string {
+	if (!text) return text;
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+		return text;
+	}
+	let used = 0;
+	let result = "";
+	for (const ch of text) {
+		const size = Buffer.byteLength(ch, "utf8");
+		if (used + size > maxBytes) {
+			const note = `\n[truncated to ${formatBytes(maxBytes)}]`;
+			return result + note;
+		}
+		result += ch;
+		used += size;
+	}
+	return result;
+}
+
+function isLikelyText(value: string): boolean {
+	if (!value) return true;
+	if (value.includes("\u0000")) return false;
+	let control = 0;
+	let replacement = 0;
+	let sample = 0;
+	const limit = Math.min(value.length, 4000);
+	for (let i = 0; i < limit; i++) {
+		const code = value.charCodeAt(i);
+		if (code === 0xfffd) replacement++;
+		if (code < 32 && code !== 9 && code !== 10 && code !== 13) control++;
+		sample++;
+	}
+	if (sample === 0) return true;
+	if (replacement / sample > 0.01) return false;
+	if (control / sample > 0.02) return false;
+	return true;
+}
+
+async function convertWithPandoc(
+	abs: string,
+	baseName: string,
+	maxBytes: number
+): Promise<string> {
+	const { code, stdout, stderr, timedOut, spawnError } = await runCommand(
+		"pandoc",
+		["--to", "plain", "--wrap=none", baseName],
+		{ cwd: path.dirname(abs), timeoutMs: 30_000 }
+	);
+	if (spawnError) {
+		const message = spawnError?.message || "failed to invoke pandoc";
+		if (/ENOENT/.test(message)) {
+			throw new Error("pandoc not found on PATH");
+		}
+		throw new Error(message);
+	}
+	if (timedOut) {
+		throw new Error("pandoc timed out");
+	}
+	if (code !== 0) {
+		const err = (stderr || "").trim();
+		throw new Error(err ? err.slice(0, 300) : `pandoc exited with code ${code}`);
+	}
+	const normalized = (stdout || "").replace(/\r\n/g, "\n");
+	const meaningful =
+		normalized.trim().length > 0 ? normalized.trim() : normalized;
+	if (!meaningful.trim().length) {
+		throw new Error("pandoc produced no textual output");
+	}
+	return truncateUtf8(meaningful, maxBytes);
+}
+
+async function convertWithVision(
+	abs: string,
+	baseName: string,
+	maxBytes: number,
+	fileSize: number
+): Promise<string> {
+	if (fileSize > MAX_VISION_INPUT_BYTES) {
+		throw new Error(
+			`input exceeds ${formatBytes(MAX_VISION_INPUT_BYTES)} vision limit`
+		);
+	}
+	const cfg = await loadConfig();
+	const provider = cfg.ai?.provider ?? "openai";
+	if (provider !== "openai") {
+		throw new Error(
+			"Vision fallback requires the OpenAI provider. Switch providers in config to enable it."
+		);
+	}
+	const apiKey =
+		(cfg.ai?.apiKey ?? "").trim() ||
+		(process.env.OPENAI_API_KEY || "").trim();
+	if (!apiKey) {
+		throw new Error("Missing OPENAI_API_KEY for vision fallback.");
+	}
+	const model =
+		(cfg.ai?.model ?? "").trim().length > 0
+			? cfg.ai.model.trim()
+			: "gpt-4o-mini";
+	const baseUrlRaw =
+		(cfg.ai?.baseUrl ?? "").trim() ||
+		(process.env.OPENAI_BASE_URL || "").trim();
+	const fileData = await fs.readFile(abs);
+	const client = new OpenAI({
+		apiKey,
+		baseURL: baseUrlRaw.length > 0 ? baseUrlRaw : undefined,
+	} as any);
+	let response;
+	try {
+		response = await client.responses.create({
+			model,
+			input: [
+				{
+					role: "user",
+					content: [
+						{ type: "input_text", text: VISION_EXTRACTION_PROMPT },
+						{
+							type: "input_file",
+							filename: baseName,
+							file_data: fileData.toString("base64"),
+						},
+					],
+				},
+			],
+			max_output_tokens: computeMaxTokens(maxBytes),
+		});
+	} catch (err: any) {
+		const message =
+			err?.message ||
+			err?.response?.data?.error?.message ||
+			String(err);
+		throw new Error(message);
+	}
+	if (response.error) {
+		throw new Error(response.error.message || "vision response failed");
+	}
+	const output = (response.output_text || "").trim();
+	if (!output) {
+		throw new Error("vision model returned empty output");
+	}
+	return truncateUtf8(output, maxBytes);
+}
+
+function computeMaxTokens(maxBytes: number): number {
+	const approx = Math.ceil(maxBytes / 4);
+	const upper = 8192;
+	const lower = 512;
+	return Math.max(lower, Math.min(upper, approx));
+}
+
+function formatBytes(bytes: number): string {
+	if (!Number.isFinite(bytes)) {
+		return String(bytes);
+	}
+	const units = ["bytes", "KB", "MB", "GB"];
+	let value = bytes;
+	let idx = 0;
+	while (value >= 1024 && idx < units.length - 1) {
+		value /= 1024;
+		idx++;
+	}
+	const precision = value >= 10 || idx === 0 ? 0 : 1;
+	return `${value.toFixed(precision)} ${units[idx]}`;
+}
 
 // List files in a directory relative to cwd
 export const listFilesTool = tool({

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
 
 export async function summarizeAudioContext(
 	prevSummary: string,

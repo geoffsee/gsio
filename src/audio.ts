@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
 
 export type CaptureMetrics = {
 	startTimeMs: number;
