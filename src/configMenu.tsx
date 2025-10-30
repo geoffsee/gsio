@@ -11,6 +11,8 @@ type Mode =
 	| "editWhisperCmd"
 	| "editWhisperModel"
 	| "editToolApproval"
+	| "editMemoryUser"
+	| "editMemoryModel"
 	| "message";
 
 export const ConfigMenu = () => {
@@ -45,7 +47,9 @@ export const ConfigMenu = () => {
 			mode === "editBaseUrl" ||
 			mode === "editWhisperCmd" ||
 			mode === "editWhisperModel" ||
-			mode === "editToolApproval"
+			mode === "editToolApproval" ||
+			mode === "editMemoryUser" ||
+			mode === "editMemoryModel"
 		) {
 			if (key.return) {
 				const val = input.trim();
@@ -99,6 +103,18 @@ export const ConfigMenu = () => {
 							};
 							setCfg(next);
 						}
+					} else if (mode === "editMemoryUser") {
+						const next = {
+							...cfg,
+							memory: { ...cfg.memory, userId: val },
+						};
+						setCfg(next);
+					} else if (mode === "editMemoryModel") {
+						const next = {
+							...cfg,
+							memory: { ...cfg.memory, embeddingModel: val },
+						};
+						setCfg(next);
 					}
 				}
 				return;
@@ -272,6 +288,18 @@ export const ConfigMenu = () => {
 					<Text color="yellow">Add tool requiring approval: {input}_</Text>
 				</>
 			)}
+			{mode === "editMemoryUser" && (
+				<>
+					<Newline />
+					<Text color="yellow">Edit memory user id: {input}_</Text>
+				</>
+			)}
+			{mode === "editMemoryModel" && (
+				<>
+					<Newline />
+					<Text color="yellow">Edit memory embedding model: {input}_</Text>
+				</>
+			)}
 			{mode === "message" && msg && (
 				<>
 					<Newline />
@@ -436,6 +464,56 @@ export const ConfigMenu = () => {
 				setCfg({
 					...c,
 					panel: { ...c.panel, maxItems: Math.max(1, c.panel.maxItems - 1) },
+				}),
+			kind: "number",
+		});
+		out.push({
+			key: "memory.enabled",
+			label: "Memory: enable long-term recall",
+			value: c.memory.enabled,
+			toggle: () =>
+				setCfg({
+					...c,
+					memory: { ...c.memory, enabled: !c.memory.enabled },
+				}),
+			kind: "toggle",
+		});
+		out.push({
+			key: "memory.user",
+			label: `Memory user id: ${c.memory.userId}`,
+			action: () => {
+				setMode("editMemoryUser");
+				setInput(c.memory.userId);
+			},
+			kind: "action",
+		});
+		out.push({
+			key: "memory.embeddingModel",
+			label: `Memory embedding model: ${c.memory.embeddingModel}`,
+			action: () => {
+				setMode("editMemoryModel");
+				setInput(c.memory.embeddingModel);
+			},
+			kind: "action",
+		});
+		out.push({
+			key: "memory.maxEntries",
+			label: `Memory max entries (${c.memory.maxEntries})`,
+			inc: () =>
+				setCfg({
+					...c,
+					memory: {
+						...c.memory,
+						maxEntries: Math.min(5000, c.memory.maxEntries + 50),
+					},
+				}),
+			dec: () =>
+				setCfg({
+					...c,
+					memory: {
+						...c.memory,
+						maxEntries: Math.max(50, c.memory.maxEntries - 50),
+					},
 				}),
 			kind: "number",
 		});

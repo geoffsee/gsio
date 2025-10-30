@@ -1,8 +1,11 @@
 # gsio
+[![npm version](https://img.shields.io/npm/v/gsio)](https://www.npmjs.com/package/gsio)
+![Tests](https://github.com/geoffsee/gsio/actions/workflows/tests.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 BYO Mechatronics
 
-> Warning: Work in progress. Messy, heavy, but working.
+> Under active development. Expect breaking changes. If something isn't working, try stepping back a version. e.g `bunx gsio@0.1.10 <optional-subcommand>`
 
 ## Install
 
@@ -43,6 +46,7 @@ $ gsio --help
 - Interactive config menu: `gsio config`.
 - Optional audio context with continuous capture + VAD + transcription + rolling summary.
 - Linger mode for autonomous actions based on recent audio context and your behavior directive.
+- Persistent memory with configurable storage path, entry limit, and embedding model for longer-term recall.
 
 Audio transcription can run locally via MLX Omni Server (OpenAI-compatible) while using Ollama for chat. See Hybrid setup below.
 
@@ -74,6 +78,8 @@ Run `gsio config` to open the interactive menu.
   - Linger: run continuously on audio (on/off).
   - Linger behavior: a natural‑language description of how the agent should act when it hears relevant audio (situational awareness).
   - Linger interval (sec): cooldown between autonomous runs.
+- Memory
+  - Enable long-term recall, set storage directory, entry cap, user id, and the embedding model string GSIO should align with (see [Memory System](docs/memory.md)).
 
 Config is stored in `.gsio-config.json` in the current working directory.
 
@@ -84,6 +90,7 @@ Config is stored in `.gsio-config.json` in the current working directory.
    - AI provider: `ollama`
    - AI model: `llama3.1:8b` (or your choice)
    - AI base URL: `http://localhost:11434/v1`
+   - Memory embedding model: e.g. `ollama nomic-ai/nomic-embed-text-v1` (matches the offline preset in `.offline-gsio-config.json`)
 3. Start `gsio` — chat and tools run locally via Ollama.
 
 Tips:
@@ -102,6 +109,7 @@ Tips:
    - Audio STT base URL: `http://localhost:10240/v1`
    - Audio STT model: `mlx-community/whisper-large-v3-turbo`
    - Audio STT apiKey: `not-needed`
+   - Memory embedding model: align with whatever embedding service you use locally.
 3. Toggle audio with Alt+A; STT goes to MLX Omni while chat uses Ollama.
 
 ## Tools Overview
@@ -136,6 +144,10 @@ Example behavior directive:
 "When I mention meetings, capture action items as TODOs (P2); if I say 'urgent', make them P1; set focus to the next actionable task and mark completed when I say it's done. Keep responses minimal."
 
 ### Offline Transcription with Whisper
+
+> Note from author: WhisperCpp was the initial approach for dictation in this project.
+> Switch to MLX for native Apple Silicon support.
+> WhisperCpp may be better supported for arm64/aarch64/x86_64 environments.
 
 You can transcribe audio locally using Whisper (no network).
 

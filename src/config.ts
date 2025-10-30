@@ -37,6 +37,13 @@ export type AppConfig = {
 	tools: {
 		requireApproval: string[]; // tool names requiring approval before execution
 	};
+	memory: {
+		enabled: boolean;
+		userId: string;
+		maxEntries: number;
+		storageDir: string;
+		embeddingModel: string;
+	};
 };
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -64,6 +71,13 @@ const DEFAULT_CONFIG: AppConfig = {
 	},
 	tools: {
 		requireApproval: ["shell_exec"],
+	},
+	memory: {
+		enabled: true,
+		userId: "local_user",
+		maxEntries: 500,
+		storageDir: ".gsio-memory",
+		embeddingModel: "text-embedding-3-small",
 	},
 };
 
@@ -184,7 +198,31 @@ function normalizeConfig(input: any): AppConfig {
 						.filter((s: string) => s.length > 0)
 				: [],
 		},
-	};
+	memory: {
+		enabled: input?.memory?.enabled !== false,
+		userId:
+			typeof input?.memory?.userId === "string" &&
+			input.memory.userId.trim().length > 0
+				? String(input.memory.userId).trim()
+				: DEFAULT_CONFIG.memory.userId,
+		maxEntries: clampInt(
+			input?.memory?.maxEntries,
+			50,
+			5000,
+			DEFAULT_CONFIG.memory.maxEntries
+		),
+		storageDir:
+			typeof input?.memory?.storageDir === "string" &&
+			input.memory.storageDir.trim().length > 0
+				? String(input.memory.storageDir).trim()
+				: DEFAULT_CONFIG.memory.storageDir,
+		embeddingModel:
+			typeof input?.memory?.embeddingModel === "string" &&
+			input.memory.embeddingModel.trim().length > 0
+				? String(input.memory.embeddingModel).trim()
+				: DEFAULT_CONFIG.memory.embeddingModel,
+	},
+};
 	cfg.tools.requireApproval = Array.from(
 		new Set([
 			...cfg.tools.requireApproval,
