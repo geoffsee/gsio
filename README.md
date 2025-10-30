@@ -87,6 +87,7 @@ Config is stored in `.gsio-config.json` in the current working directory.
 3. Start `gsio` — chat and tools run locally via Ollama.
 
 Tips:
+
 - If using an OpenAI‑compatible proxy for Ollama, the defaults above should work.
 - Function/tool calling support depends on the model/server; general chat works regardless.
 
@@ -119,6 +120,7 @@ Tips:
 - shell_exec(cmd, args[], cwd?, timeoutMs?, stdin?, dangerous?)
 
 Notes:
+
 - `shell_exec` defaults to a safe allowlist; add more in config or enable dangerous commands there. Execution is confined to the project directory, runs without a shell, and truncates output.
 - `http_get` limits size and only returns text/JSON content types.
 
@@ -145,5 +147,6 @@ You can transcribe audio locally using Whisper (no network).
 - Start `gsio` and toggle audio (Alt+A).
 
 Notes:
+
 - The app invokes Whisper like: `whisper-cpp -m <model.bin> -f <wav> -otxt -of <tmpPrefix> [-l en]` and reads `<tmpPrefix>.txt`.
 - Customize extra flags by editing `.gsio-config.json` (`audio.whisper.extraArgs`).
