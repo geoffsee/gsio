@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import React from 'react';
-import {render} from 'ink';
-import meow from 'meow';
-import App from './app.js';
-import {Chat} from './chat.js';
-import {ConfigMenu} from './configMenu.js';
-import {configureLLM} from './llm.js';
+import React from "react";
+import { render } from "ink";
+import meow from "meow";
+import App from "./app.js";
+import { Chat } from "./chat.js";
+import { ConfigMenu } from "./configMenu.js";
+import { configureLLM } from "./llm.js";
 
 const cli = meow(
 	`
@@ -30,14 +30,14 @@ const cli = meow(
 		importMeta: import.meta,
 		flags: {
 			name: {
-				type: 'string',
+				type: "string",
 			},
 			debug: {
-				type: 'boolean',
+				type: "boolean",
 				default: false,
 			},
 		},
-	},
+	}
 );
 
 const subcommand = cli.input[0];
@@ -45,12 +45,12 @@ const subcommand = cli.input[0];
 await configureLLM();
 
 render(
-  <>
-    {subcommand === 'config' ? (
-      <ConfigMenu />
-    ) : (
-      <Chat debug={Boolean(cli.flags.debug)} />
-    )}
-    <App name={cli.flags.name} />
-  </>,
+	<>
+		{subcommand === "config" ? (
+			<ConfigMenu />
+		) : (
+			<Chat debug={Boolean(cli.flags.debug)} />
+		)}
+		<App name={cli.flags.name} />
+	</>
 );
