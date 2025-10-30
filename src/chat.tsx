@@ -14,6 +14,7 @@ import { loadConfig, saveConfig } from "./config.js";
 import { startContinuousCapture, type CaptureMetrics } from "./audio.js";
 import { summarizeAudioContext } from "./summarizer.js";
 import { UserInput } from "./userInput.js";
+import { Markdown } from "./markdown.js";
 
 // Agent instantiated inside component based on config (e.g., audio flag)
 
@@ -277,8 +278,9 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			setIsStreaming(true);
 			setResponse("");
 			let stream: StreamedRunResult<any, any> | null = null;
+			const runOptions = { stream: true as const, maxTurns: 30 };
 			try {
-				stream = await run(agent, state, { stream: true });
+				stream = await run(agent, state, runOptions);
 				const full = await consumeStream(stream, source);
 				if (stream.interruptions?.length) {
 					handleInterruptions(
@@ -690,8 +692,9 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		const lastMessage = chatHistory[chatHistory.length - 1]?.content || "";
 		let stream: StreamedRunResult<any, any> | null = null;
 
-		try {
-			stream = await run(agent, lastMessage, { stream: true });
+			const runOptions = { stream: true as const, maxTurns: 30 };
+			try {
+				stream = await run(agent, lastMessage, runOptions);
 			const fullResponse = await consumeStream(stream, "chat");
 			if (stream.interruptions?.length) {
 				handleInterruptions(
@@ -836,8 +839,9 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		setResponse("");
 
 		let stream: StreamedRunResult<any, any> | null = null;
-		try {
-			stream = await run(agent, instruction, { stream: true });
+			const runOptions = { stream: true as const, maxTurns: 30 };
+			try {
+				stream = await run(agent, instruction, runOptions);
 			const full = await consumeStream(stream, "linger");
 			if (stream.interruptions?.length) {
 				handleInterruptions(
@@ -869,6 +873,9 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		}
 	}
 
+	const streamingContent = response ?? "";
+	const hasStreamingContent = streamingContent.trim().length > 0;
+
 	return (
 		<Box flexDirection="row">
 			<Box flexDirection="column" flexGrow={1}>
@@ -897,16 +904,44 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					)}
 				</Box>
 				<Box flexDirection="column" flexGrow={1}>
-					{messages.map((msg, i) => (
-						<Box key={i} flexDirection="column" marginBottom={1}>
-							<Text color={msg.role === "user" ? "green" : "yellow"}>
-								{msg.role === "user" ? "You: " : "AI: "}
-								{msg.content}
-							</Text>
-						</Box>
-					))}
+					{messages.map((msg, i) => {
+						const color = msg.role === "user" ? "green" : "yellow";
+						const label = msg.role === "user" ? "You" : "AI";
+						const hasContent = msg.content?.trim().length > 0;
+						return (
+							<Box key={i} flexDirection="column" marginBottom={1}>
+								<Text color={color} bold>
+									{label}:
+								</Text>
+								<Box marginLeft={2} flexDirection="column">
+									{hasContent ? (
+										<Markdown content={msg.content} color={color} />
+									) : (
+										<Text color={color} dimColor>
+											(no content)
+										</Text>
+									)}
+								</Box>
+							</Box>
+						);
+					})}
 
-					{isStreaming && <Text color="yellow">{response}</Text>}
+					{isStreaming && (
+						<Box flexDirection="column" marginBottom={1}>
+							<Text color="yellow" bold>
+								AI (typing):
+							</Text>
+							<Box marginLeft={2} flexDirection="column">
+								{hasStreamingContent ? (
+									<Markdown content={streamingContent} color="yellow" />
+								) : (
+									<Text color="yellow" dimColor>
+										…
+									</Text>
+								)}
+							</Box>
+						</Box>
+					)}
 				</Box>
 				<UserInput
 					value={input}
