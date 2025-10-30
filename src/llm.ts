@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
 import { setOpenAIAPI, setDefaultOpenAIKey } from "@openai/agents-openai";
 
 // Configure the global LLM provider (OpenAI cloud or local Ollama via OpenAI-compatible API)

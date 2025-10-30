@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import LLMMemory from '../src/index.js';
-import { createMockStorage } from './mocks.js';
+import LLMMemory from '../src/index';
+import { createMockStorage } from './mocks';
 
 describe('Embeddings and Similarity', () => {
   let memory: LLMMemory;

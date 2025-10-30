@@ -1,5 +1,5 @@
-import { Message, MemoryEntry, RecallOptions, MemoryConfig, SimilarityResult } from './types.js';
-import { UnstorageAdapter } from './store.js';
+import { Message, MemoryEntry, RecallOptions, MemoryConfig, SimilarityResult } from './types';
+import { UnstorageAdapter } from './store';
 
 export default class LLMMemory {
   private adapter: UnstorageAdapter;
@@ -279,5 +279,5 @@ export default class LLMMemory {
   }
 }
 
-export * from './types.js';
-export { UnstorageAdapter } from './store.js';
+export * from './types';
+export { UnstorageAdapter } from './store';

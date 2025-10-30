@@ -131,6 +131,7 @@ Notes:
 
 - `shell_exec` defaults to a safe allowlist; add more in config or enable dangerous commands there. Execution is confined to the project directory, runs without a shell, and truncates output.
 - `http_get` limits size and only returns text/JSON content types.
+- `read_file` automatically converts most PDFs, Office docs, and images: it tries `pandoc` first and falls back to an OpenAI vision model when needed (requires the OpenAI provider and API key for the vision step).
 
 ## Audio & Linger
 

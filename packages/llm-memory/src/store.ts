@@ -1,5 +1,5 @@
 import { prefixStorage, type Storage } from 'unstorage';
-import { MemoryEntry, StorageAdapter } from './types.js';
+import { MemoryEntry, StorageAdapter } from './types';
 
 type SerializedMemoryEntry = Omit<MemoryEntry, 'embedding'> & { embedding: number[] };
 

@@ -10,3 +10,4 @@ models/
 notes.txt
 vendored
 .gsio-memory/
+src/*.js

@@ -2,10 +2,10 @@
 import React from "react";
 import { render } from "ink";
 import meow from "meow";
-import App from "./app.js";
-import { Chat } from "./chat.js";
-import { ConfigMenu } from "./configMenu.js";
-import { configureLLM } from "./llm.js";
+import App from "./app";
+import { Chat } from "./chat";
+import { ConfigMenu } from "./configMenu";
+import { configureLLM } from "./llm";
 
 const cli = meow(
 	`

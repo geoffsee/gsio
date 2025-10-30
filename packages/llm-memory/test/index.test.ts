@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import LLMMemory from '../src/index.js';
-import { Message, MemoryEntry, RecallOptions } from '../src/types.js';
-import { createMockStorage } from './mocks.js';
+import LLMMemory from '../src/index';
+import { Message, MemoryEntry, RecallOptions } from '../src/types';
+import { createMockStorage } from './mocks';
 
 describe('LLMMemory', () => {
   let memory: LLMMemory;
