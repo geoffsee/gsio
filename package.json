@@ -1,11 +1,16 @@
 {
 	"name": "gsio",
-	"version": "0.1.10",
+	"version": "0.2.0",
 	"license": "MIT",
 	"bin": "dist/cli.js",
+	"workspaces": ["packages/llm-memory"],
 	"type": "module",
 	"engines": {
 		"node": ">=16"
+	},
+	"dependencies": {
+		"@ai-seemueller-io/llm-memory": "workspace:*",
+		"unstorage": "^1.17.1"
 	},
 	"scripts": {
 		"build": "rm -rf ./dist && bun ./build.ts",

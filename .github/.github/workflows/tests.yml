@@ -1,0 +1,35 @@
+name: Tests
+permissions:
+  pull-requests: write
+  statuses: write
+  checks: write
+  contents: read
+  actions: read
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize]
+  merge_group:
+    types: [checks_requested]
+jobs:
+  tests:
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Test
+        run: bun test

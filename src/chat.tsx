@@ -10,11 +10,18 @@ import {
 } from "@openai/agents";
 import { defaultTools } from "./tools.js";
 import { listTodos, shortList, getFocus } from "./todoStore.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { loadConfig, saveConfig, type AppConfig } from "./config.js";
 import { startContinuousCapture, type CaptureMetrics } from "./audio.js";
 import { summarizeAudioContext } from "./summarizer.js";
 import { UserInput } from "./userInput.js";
 import { Markdown } from "./markdown.js";
+import LLMMemory, {
+	type Message as MemoryMessage,
+} from "@ai-seemueller-io/llm-memory";
+import { createStorage } from "unstorage";
+import fsDriver from "unstorage/drivers/fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 // Agent instantiated inside component based on config (e.g., audio flag)
 
@@ -33,6 +40,14 @@ type PendingInterruption = {
 };
 
 type ChatProps = { debug?: boolean };
+
+type MemorySettings = {
+	enabled: boolean;
+	userId: string;
+	maxEntries: number;
+	storageDir: string;
+	embeddingModel: string;
+};
 
 export const Chat = ({ debug = false }: ChatProps) => {
 	const { stdout } = useStdout();
@@ -75,10 +90,21 @@ export const Chat = ({ debug = false }: ChatProps) => {
 	const [lingerBehavior, setLingerBehavior] = useState<string>("");
 	const [lingerIntervalSec, setLingerIntervalSec] = useState<number>(20);
 	const lastLingerRef = React.useRef<number>(0);
+	const memoryRef = React.useRef<LLMMemory | null>(null);
+	const memorySettingsRef = React.useRef<MemorySettings | null>(null);
+	const memoryUserIdRef = React.useRef<string>("local_user");
+	const [memoryEnabled, setMemoryEnabled] = useState<boolean>(false);
+	const [memoryStatusText, setMemoryStatusText] = useState<string>("disabled");
+	const [memoryHasError, setMemoryHasError] = useState<boolean>(false);
+	const [memoryEmbeddingModel, setMemoryEmbeddingModel] =
+		useState<string>("text-embedding-3-small");
 
 	const agent = React.useMemo(() => {
 		const audioLine = audioEnabled
 			? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
+			: "";
+		const memoryLine = memoryEnabled
+			? `Long-term memory is available; prioritize consistency with recalled context. Embedding model: ${memoryEmbeddingModel}.`
 			: "";
 		return new Agent({
 			name: "Assistant",
@@ -86,6 +112,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				"You are a helpful assistant. Use tools when helpful. Prefer concise answers.",
 				"Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.",
 				audioLine,
+				memoryLine,
 				audioSummary ? `Recent audio context summary: ${audioSummary}` : "",
 				"You can manage a persistent todo list stored in the current working directory using tools:",
 				"- todo_add(text): Add a new todo",
@@ -107,7 +134,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				.join("\n"),
 			tools: defaultTools,
 		});
-	}, [audioEnabled, audioSummary]);
+	}, [audioEnabled, audioSummary, memoryEnabled, memoryEmbeddingModel]);
 
 	const appendAudioLog = React.useCallback((msg: string) => {
 		const ts = new Date().toLocaleTimeString();
@@ -122,6 +149,143 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			);
 		},
 		[]
+	);
+
+	const toMemoryMessages = React.useCallback(
+		(msgs: Message[]): MemoryMessage[] =>
+			msgs.map((msg) => ({ role: msg.role, content: msg.content })),
+		[]
+	);
+
+	const ensureMemory = React.useCallback(
+		async (cfg: AppConfig) => {
+		const settings: MemorySettings = {
+			enabled: cfg.memory?.enabled ?? false,
+			userId: cfg.memory?.userId ?? "local_user",
+			maxEntries: cfg.memory?.maxEntries ?? 500,
+			storageDir: cfg.memory?.storageDir ?? ".gsio-memory",
+			embeddingModel: cfg.memory?.embeddingModel ?? "text-embedding-3-small",
+		};
+		memoryUserIdRef.current = settings.userId;
+		setMemoryEmbeddingModel(settings.embeddingModel);
+		if (!settings.enabled) {
+			memoryRef.current = null;
+			memorySettingsRef.current = settings;
+			setMemoryEnabled(false);
+			setMemoryStatusText("disabled");
+			setMemoryHasError(false);
+			return;
+		}
+
+		const prev = memorySettingsRef.current;
+		if (
+			prev &&
+			prev.enabled &&
+			prev.userId === settings.userId &&
+			prev.maxEntries === settings.maxEntries &&
+			prev.storageDir === settings.storageDir &&
+			prev.embeddingModel === settings.embeddingModel &&
+			memoryRef.current
+		) {
+			setMemoryEnabled(true);
+			setMemoryStatusText("active");
+			setMemoryHasError(false);
+			return;
+		}
+
+		try {
+				const base = path.resolve(process.cwd(), settings.storageDir);
+			await fs.mkdir(base, { recursive: true });
+			const storage = createStorage({ driver: fsDriver({ base }) });
+			memoryRef.current = new LLMMemory({
+				storage,
+				prefix: "chat:",
+				maxEntries: settings.maxEntries,
+			});
+			memorySettingsRef.current = settings;
+			setMemoryEnabled(true);
+			setMemoryStatusText("active");
+			setMemoryHasError(false);
+			appendEventLog(
+				"chat",
+				`memory_ready dir=${settings.storageDir} model=${settings.embeddingModel}`
+			);
+		} catch (err: any) {
+			const msg = err?.message || String(err);
+			memoryRef.current = null;
+			memorySettingsRef.current = { ...settings, enabled: false };
+			setMemoryEnabled(false);
+			setMemoryStatusText(`error: ${msg}`);
+			setMemoryHasError(true);
+			appendEventLog("chat", `memory_error ${msg}`);
+		}
+		},
+		[appendEventLog]
+	);
+
+	const applyMemoryToPrompt = React.useCallback(
+		async (history: Message[], prompt: string, source: "chat" | "linger") => {
+			const memory = memoryRef.current;
+			if (!memory) return prompt;
+			const usable = history.filter(
+				(msg) => msg.content && msg.content.trim().length > 0
+			);
+			if (usable.length === 0) return prompt;
+			try {
+				const recall = await memory.recall(toMemoryMessages(usable), {
+					topK: 3,
+					minSimilarity: 0.3,
+					maxTokens: 600,
+				});
+				if (!recall || recall.trim().length === 0) {
+					return prompt;
+				}
+				setMemoryHasError(false);
+				setMemoryStatusText("active");
+				appendEventLog(
+					source,
+					`memory_recall ${Math.max(1, Math.round(recall.length / 4))} tokens`
+				);
+				return `Relevant memory:\n${recall}\n\nCurrent request:\n${prompt}`;
+			} catch (err: any) {
+				const msg = err?.message || String(err);
+				setMemoryHasError(true);
+				setMemoryStatusText(`error: ${msg}`);
+				appendEventLog(source, `memory_recall_error ${msg}`);
+				return prompt;
+			}
+		},
+		[appendEventLog, toMemoryMessages]
+	);
+
+	const memorizeExchange = React.useCallback(
+		async (history: Message[], source: "chat" | "linger") => {
+			const memory = memoryRef.current;
+			if (!memory) return;
+			const usable = history.filter(
+				(msg) => msg.content && msg.content.trim().length > 0
+			);
+			if (usable.length === 0) return;
+			const window = usable.slice(-6);
+			try {
+				await memory.memorize(
+					toMemoryMessages(window),
+					memoryUserIdRef.current
+				);
+				setMemoryHasError(false);
+				setMemoryStatusText("active");
+				appendEventLog(
+					source,
+					`memory_memorized ${window.length} msgs`
+				);
+			} catch (err: any) {
+				const msg = err?.message || String(err);
+				setMemoryHasError(true);
+				setMemoryStatusText(`error: ${msg}`);
+				appendEventLog(source, `memory_mem_error ${msg}`);
+			}
+		},
+		[appendEventLog, toMemoryMessages]
 	);
 
 	const pendingRef = React.useRef<PendingInterruption[]>([]);
@@ -289,10 +453,27 @@ export const Chat = ({ debug = false }: ChatProps) => {
 						stream.state
 					);
 				}
-				setMessages((m: Message[]) => [
-					...m,
-					{ role: "assistant", content: full || "(no response)" },
-				]);
+				setMessages((m: Message[]) => {
+					const assistantContent =
+						(full ?? "").trim().length > 0 ? full : "";
+					const nextDisplay = [
+						...m,
+						{
+							role: "assistant",
+							content: assistantContent || "(no response)",
+						},
+					];
+					if (assistantContent) {
+						void memorizeExchange(
+							[
+								...m,
+								{ role: "assistant", content: assistantContent },
+							],
+							source
+						);
+					}
+					return nextDisplay;
+				});
 			} catch (err: any) {
 				const msg = err?.message || "Unknown error";
 				appendEventLog(source, `error ${msg}`);
@@ -391,20 +572,34 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		setCursor(clampCursor(pos ?? s.length, s));
 	};
 
+	const isWhitespace = (ch: string) =>
+		ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+	const isWordChar = (ch: string) => /[0-9A-Za-z_]/.test(ch);
+	const charClass = (ch: string) =>
+		isWhitespace(ch) ? "whitespace" : isWordChar(ch) ? "word" : "symbol";
+
 	const prevWordIndex = (s: string, pos: number) => {
 		let i = Math.max(0, Math.min(pos, s.length));
 		if (i === 0) return 0;
-		i--; // start left of cursor
-		while (i > 0 && s[i] === " ") i--;
-		while (i > 0 && s[i] !== " " && s[i] !== "\n" && s[i] !== "\t") i--;
-		if (i > 0 && (s[i] === " " || s[i] === "\n" || s[i] === "\t")) i++;
-		return i;
+		i--;
+		while (i >= 0 && isWhitespace(s[i])) i--;
+		if (i < 0) return 0;
+		const target = charClass(s[i]);
+		while (i >= 0 && charClass(s[i]) === target) i--;
+		return i + 1;
 	};
 
 	const nextWordIndex = (s: string, pos: number) => {
 		let i = Math.max(0, Math.min(pos, s.length));
-		while (i < s.length && s[i] === " ") i++;
-		while (i < s.length && s[i] !== " " && s[i] !== "\n" && s[i] !== "\t") i++;
+		const { length } = s;
+		if (i >= length) return length;
+		if (isWhitespace(s[i])) {
+			while (i < length && isWhitespace(s[i])) i++;
+			return i;
+		}
+		const target = charClass(s[i]);
+		while (i < length && charClass(s[i]) === target) i++;
+		while (i < length && isWhitespace(s[i])) i++;
 		return i;
 	};
 
@@ -637,9 +832,11 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			key.backspace ||
 			deleteMeansBackspace ||
 			(key.ctrl && (inputKey === "h" || inputKey === "H"));
-		const isMetaBackspace =
-			key.meta &&
-			(key.backspace || (key.ctrl && (inputKey === "h" || inputKey === "H")));
+	const isMetaBackspace =
+		key.meta &&
+		(key.backspace ||
+			key.delete ||
+			(key.ctrl && (inputKey === "h" || inputKey === "H")));
 		if (isBackspaceKey || isMetaBackspace) {
 			if (cursor === 0) return;
 			if (isMetaBackspace) {
@@ -694,7 +891,12 @@ export const Chat = ({ debug = false }: ChatProps) => {
 
 			const runOptions = { stream: true as const, maxTurns: 30 };
 			try {
-				stream = await run(agent, lastMessage, runOptions);
+				const promptWithMemory = await applyMemoryToPrompt(
+					chatHistory,
+					lastMessage,
+					"chat"
+				);
+				stream = await run(agent, promptWithMemory, runOptions);
 			const fullResponse = await consumeStream(stream, "chat");
 			if (stream.interruptions?.length) {
 				handleInterruptions(
@@ -703,10 +905,23 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					stream.state
 				);
 			}
-			setMessages([
+			const assistantContent =
+				(fullResponse ?? "").trim().length > 0 ? fullResponse : "";
+			const displayMessages = [
 				...chatHistory,
-				{ role: "assistant", content: fullResponse || "(no response)" },
-			] as any);
+				{
+					role: "assistant",
+					content: assistantContent || "(no response)",
+				},
+			] as Message[];
+			setMessages(displayMessages as any);
+			if (assistantContent) {
+				const storedMessages = [
+					...chatHistory,
+					{ role: "assistant", content: assistantContent },
+				] as Message[];
+				await memorizeExchange(storedMessages, "chat");
+			}
 		} catch (err: any) {
 			const msg = err?.message || "Unknown error";
 			setMessages([
@@ -729,6 +944,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 	async function refreshTodos() {
 		try {
 			const cfg = await loadConfig();
+			await ensureMemory(cfg);
 			const items = await listTodos(cfg.panel.todoShowCompleted);
 			const head = shortList(items, cfg.panel.maxItems);
 			const f = await getFocus();
@@ -841,7 +1057,12 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		let stream: StreamedRunResult<any, any> | null = null;
 			const runOptions = { stream: true as const, maxTurns: 30 };
 			try {
-				stream = await run(agent, instruction, runOptions);
+				const promptWithMemory = await applyMemoryToPrompt(
+					newMessages,
+					instruction,
+					"linger"
+				);
+				stream = await run(agent, promptWithMemory, runOptions);
 			const full = await consumeStream(stream, "linger");
 			if (stream.interruptions?.length) {
 				handleInterruptions(
@@ -850,10 +1071,27 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					stream.state
 				);
 			}
-			setMessages((m: Message[]) => [
-				...m,
-				{ role: "assistant", content: full || "(no response)" },
-			]);
+			setMessages((m: Message[]) => {
+				const assistantContent =
+					(full ?? "").trim().length > 0 ? full : "";
+				const nextDisplay = [
+					...m,
+					{
+						role: "assistant",
+						content: assistantContent || "(no response)",
+					},
+				];
+				if (assistantContent) {
+					void memorizeExchange(
+						[
+							...m,
+							{ role: "assistant", content: assistantContent },
+						],
+						"linger"
+					);
+				}
+				return nextDisplay;
+			});
 		} catch (err: any) {
 			const msg = err?.message || "Unknown error";
 			appendEventLog("linger", `error ${msg}`);
@@ -893,6 +1131,15 @@ export const Chat = ({ debug = false }: ChatProps) => {
 							<Newline />
 						</>
 					)}
+					<Text color={memoryHasError ? "red" : "gray"}>
+						Memory:{" "}
+						{memoryEnabled
+							? memoryHasError
+								? memoryStatusText
+								: `${memoryStatusText} (model: ${memoryEmbeddingModel})`
+							: "disabled"}
+					</Text>
+					<Newline />
 					{audioEnabled && (
 						<>
 							<Text color="gray">

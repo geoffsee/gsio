@@ -453,8 +453,11 @@ export const shellExecTool = tool({
 			"stat",
 			"rg",
 			"find",
+			"curl",
+			"git",
 			"mkdir",
 			"bun",
+			"pandoc"
 		]);
 		for (const extra of cfg.shell.extraAllowlist) allowed.add(extra);
 		if (!dangerous && !allowed.has(cmd)) {

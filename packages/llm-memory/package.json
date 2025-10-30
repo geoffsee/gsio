@@ -1,0 +1,45 @@
+{
+  "name": "@ai-seemueller-io/llm-memory",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./types": {
+      "import": "./src/types.ts",
+      "types": "./src/types.ts"
+    },
+    "./store": {
+      "import": "./src/store.ts",
+      "types": "./src/store.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage.enabled=true",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "unstorage": "^1.17.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^5.4.12",
+    "vitest": "^3.2.4"
+  },
+  "description": "High-performance LLM memory system with intermediate representation for token efficiency",
+  "keywords": [
+    "llm",
+    "memory",
+    "vector-storage",
+    "compression",
+    "cloudflare",
+    "typescript"
+  ],
+  "author": "AI Seemueller",
+  "license": "MIT"
+}
