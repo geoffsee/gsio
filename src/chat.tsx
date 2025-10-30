@@ -13,6 +13,7 @@ import {listTodos, shortList, getFocus} from './todoStore.js';
 import {loadConfig, saveConfig} from './config.js';
 import {startContinuousCapture, type CaptureMetrics} from './audio.js';
 import {summarizeAudioContext} from './summarizer.js';
+import {UserInput} from './userInput.js';
 
 // Agent instantiated inside component based on config (e.g., audio flag)
 
@@ -707,9 +708,6 @@ export const Chat = ({debug = false}: ChatProps) => {
     }
   }
 
-  const left = input.slice(0, cursor);
-  const right = input.slice(cursor);
-
   return (
     <Box flexDirection="row">
       <Box flexDirection="column" flexGrow={1}>
@@ -742,24 +740,14 @@ export const Chat = ({debug = false}: ChatProps) => {
 
           {isStreaming && <Text color="yellow">{response}</Text>}
         </Box>
-        <Box flexDirection="column" flexShrink={0} marginTop={1}>
-          <Text>
-            <Text color="magenta">{'>'}</Text>{' '}
-            {left}
-            <Text color="magenta">|</Text>
-            {right}
-          </Text>
-
-          {debug && (
-            <>
-              <Newline />
-              <Text color="gray">[debug] input: {lastInput}</Text>
-              <Text color="gray">[debug] flags: {lastFlags}</Text>
-              <Text color="gray">[debug] action: {lastAction}</Text>
-              <Text color="gray">[debug] cursor: {cursor}/{input.length}</Text>
-            </>
-          )}
-        </Box>
+        <UserInput
+          value={input}
+          cursor={cursor}
+          debug={debug}
+          lastInput={lastInput}
+          lastFlags={lastFlags}
+          lastAction={lastAction}
+        />
       </Box>
       <Box flexDirection="column" width={rightWidth} marginLeft={rightMargin}>
         {audioEnabled && (
