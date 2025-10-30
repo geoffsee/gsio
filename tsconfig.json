@@ -2,7 +2,9 @@
 	"compilerOptions": {
 		"outDir": "dist",
 		"jsx": "preserve",
-		"moduleResolution": "bundler"
+		"moduleResolution": "bundler",
+		"module": "esnext",
+		"target": "esnext"
 	},
 	"include": ["src"]
 }
