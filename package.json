@@ -11,7 +11,7 @@
 	"dependencies": {
 		"@openai/agents-openai": "^0.2.1",
 		"@ai-seemueller-io/llm-memory": "workspace:*",
-		"unstorage": "^1.17.1",
+		"unstorage": "^1.17.2",
 		"zod": "3"
 	},
 	"scripts": {
