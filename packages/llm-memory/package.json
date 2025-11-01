@@ -1,5 +1,5 @@
 {
-  "name": "@ai-seemueller-io/llm-memory",
+  "name": "llm-memory",
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.ts",

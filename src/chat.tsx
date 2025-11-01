@@ -17,7 +17,7 @@ import { UserInput } from "./userInput";
 import { Markdown } from "./markdown";
 import LLMMemory, {
 	type Message as MemoryMessage,
-} from "@ai-seemueller-io/llm-memory";
+} from "llm-memory";
 import { createStorage } from "unstorage";
 import fsDriver from "unstorage/drivers/fs";
 import fs from "node:fs/promises";
