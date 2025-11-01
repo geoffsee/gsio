@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "unstorage": "^1.17.1"
+    "unstorage": "^1.17.2"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
