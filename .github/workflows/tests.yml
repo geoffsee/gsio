@@ -7,7 +7,7 @@ permissions:
   actions: read
 on:
   push:
-    branches: [master]
+    branches: [master, ci]
   pull_request:
     branches: [master]
     types: [opened, reopened, synchronize]
