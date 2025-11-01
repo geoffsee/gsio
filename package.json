@@ -9,8 +9,10 @@
 		"node": ">=16"
 	},
 	"dependencies": {
+		"@openai/agents-openai": "^0.2.1",
 		"@ai-seemueller-io/llm-memory": "workspace:*",
-		"unstorage": "^1.17.1"
+		"unstorage": "^1.17.1",
+		"zod": "3"
 	},
 	"scripts": {
 		"build": "rm -rf ./dist && bun ./build.ts",
@@ -33,7 +35,6 @@
 		"react": "^18.2.0",
 		"react-devtools-core": "^7.0.1",
 		"ts-node": "^10.9.1",
-		"typescript": "^5.0.3",
-		"zod": "3"
+		"typescript": "^5.0.3"
 	}
 }
