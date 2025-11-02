@@ -20,6 +20,13 @@ import { startContinuousCapture, type CaptureMetrics } from "./audio";
 import { summarizeAudioContext } from "./summarizer";
 import { UserInput } from "./userInput";
 import { Markdown } from "./markdown";
+import {
+	createSessionId,
+	listSessions,
+	loadSession,
+	saveSession,
+	type SessionSummary,
+} from "./sessionStore";
 import LLMMemory, {
 	type Message as MemoryMessage,
 } from "llm-memory";
@@ -53,6 +60,32 @@ type MemorySettings = {
 	storageDir: string;
 	embeddingModel: string;
 };
+
+type SlashCommand = {
+	id: "resume";
+	trigger: string;
+	description: string;
+};
+
+const commandTitleFromContent = (content: string): string => {
+	const stripped = content.replace(/\s+/g, " ").trim();
+	if (!stripped) return "New Session";
+	return stripped.length > 60 ? `${stripped.slice(0, 57)}…` : stripped;
+};
+
+const sessionTitleFromMessages = (msgs: Message[]): string => {
+	const firstUser = msgs.find((msg) => msg.role === "user");
+	if (!firstUser) return "New Session";
+	return commandTitleFromContent(firstUser.content);
+};
+
+const SLASH_COMMANDS: SlashCommand[] = [
+	{
+		id: "resume",
+		trigger: "/resume",
+		description: "Resume a saved chat session",
+	},
+];
 
 export const Chat = ({ debug = false }: ChatProps) => {
 	const { stdout } = useStdout();
@@ -103,6 +136,16 @@ export const Chat = ({ debug = false }: ChatProps) => {
 	const [memoryHasError, setMemoryHasError] = useState<boolean>(false);
 	const [memoryEmbeddingModel, setMemoryEmbeddingModel] =
 		useState<string>("text-embedding-3-small");
+	const [commandIndex, setCommandIndex] = useState<number>(0);
+	const [resumeMenuOpen, setResumeMenuOpen] = useState<boolean>(false);
+	const [resumeSessions, setResumeSessions] = useState<SessionSummary[]>([]);
+	const [resumeIndex, setResumeIndex] = useState<number>(0);
+	const [resumeError, setResumeError] = useState<string | null>(null);
+	const [resumeLoading, setResumeLoading] = useState<boolean>(false);
+
+	const sessionIdRef = React.useRef<string>(createSessionId());
+	const sessionCreatedAtRef = React.useRef<string>(new Date().toISOString());
+	const sessionTitleRef = React.useRef<string>("");
 
 	const agent = React.useMemo(() => {
 		const audioLine = audioEnabled
@@ -617,6 +660,150 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		return /[\u0020-\u007E\n\r\t]/.test(s);
 	};
 
+	const trimmedInput = input.trimStart();
+	const commandModeActive =
+		!resumeMenuOpen && trimmedInput.startsWith("/") && !isStreaming;
+	const commandQuery = commandModeActive
+		? trimmedInput.slice(1).toLowerCase()
+		: "";
+	const commandSuggestions = React.useMemo(() => {
+		if (!commandModeActive) return [] as SlashCommand[];
+		if (!commandQuery) return SLASH_COMMANDS;
+		return SLASH_COMMANDS.filter((cmd) => {
+			const haystack = `${cmd.trigger} ${cmd.description}`.toLowerCase();
+			return haystack.includes(commandQuery);
+		});
+	}, [commandModeActive, commandQuery]);
+
+	const executeCommand = React.useCallback(
+		(cmd: SlashCommand) => {
+			switch (cmd.id) {
+				case "resume": {
+					setInputAndCursor("");
+					setCommandIndex(0);
+					setResumeSessions([]);
+					setResumeIndex(0);
+					setResumeError(null);
+					setResumeLoading(true);
+					setResumeMenuOpen(true);
+					appendEventLog("chat", "session_resume_menu_open");
+					break;
+				}
+			}
+		},
+		[
+			appendEventLog,
+			setCommandIndex,
+			setInputAndCursor,
+			setResumeError,
+			setResumeIndex,
+			setResumeLoading,
+			setResumeMenuOpen,
+			setResumeSessions,
+		]
+	);
+
+	React.useEffect(() => {
+		if (!commandModeActive) {
+			setCommandIndex(0);
+			return;
+		}
+		if (commandSuggestions.length === 0) {
+			setCommandIndex(0);
+			return;
+		}
+		setCommandIndex((prev) =>
+			Math.max(0, Math.min(prev, commandSuggestions.length - 1))
+		);
+	}, [commandModeActive, commandSuggestions.length]);
+
+	React.useEffect(() => {
+		if (!resumeMenuOpen) return;
+		let cancelled = false;
+		setResumeLoading(true);
+		setResumeError(null);
+		setResumeSessions([]);
+		setResumeIndex(0);
+		appendEventLog("chat", "session_resume_menu_fetch");
+		(async () => {
+			try {
+				const sessions = await listSessions();
+				if (cancelled) return;
+				setResumeSessions(sessions);
+				if (sessions.length === 0) {
+					setResumeError("No saved sessions yet.");
+				}
+			} catch (err: any) {
+				if (cancelled) return;
+				const message = err?.message || String(err);
+				setResumeError(message);
+				setResumeSessions([]);
+				appendEventLog("chat", `session_resume_menu_error ${message}`);
+			} finally {
+				if (cancelled) return;
+				setResumeLoading(false);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [resumeMenuOpen, appendEventLog]);
+
+	const handleResumeSelection = React.useCallback(
+		async (summary: SessionSummary) => {
+			try {
+				setResumeLoading(true);
+				setResumeError(null);
+				const data = await loadSession(summary.id);
+				if (!data) {
+					const message = "Session not found.";
+					setResumeError(message);
+					appendEventLog("chat", `session_resume_missing ${summary.id}`);
+					return;
+				}
+				const restoredMessages: Message[] = data.messages.map((msg) => ({
+					role: msg.role,
+					content: msg.content,
+				}));
+				setMessages(restoredMessages as any);
+				setHistory(
+					restoredMessages
+						.filter((msg) => msg.role === "user")
+						.map((msg) => msg.content)
+				);
+				setHistoryIndex(null);
+				setDraftBeforeHistory("");
+				setInputAndCursor("");
+				setResponse(null);
+				setIsStreaming(false);
+				sessionIdRef.current = data.id;
+				sessionCreatedAtRef.current = data.createdAt;
+				sessionTitleRef.current =
+					data.title && data.title.trim().length > 0
+						? data.title
+						: sessionTitleFromMessages(restoredMessages);
+				setResumeMenuOpen(false);
+				appendEventLog("chat", `session_resumed ${data.id}`);
+			} catch (err: any) {
+				const message = err?.message || String(err);
+				setResumeError(message);
+				appendEventLog("chat", `session_resume_error ${message}`);
+			} finally {
+				setResumeLoading(false);
+			}
+		},
+		[
+			appendEventLog,
+			setDraftBeforeHistory,
+			setHistory,
+			setHistoryIndex,
+			setInputAndCursor,
+			setIsStreaming,
+			setResponse,
+			setResumeMenuOpen,
+		]
+	);
+
 	// Handle keyboard input with editing features
 	useInput((inputKey, key) => {
 		// record raw input and flags for debugging
@@ -654,6 +841,43 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			);
 			setLastAction("(none)");
 		}
+		if (resumeMenuOpen) {
+			const count = resumeSessions.length;
+			if (key.escape) {
+				setResumeMenuOpen(false);
+				setResumeError(null);
+				if (debug) setLastAction("resume: cancel");
+				return;
+			}
+			if ((key.upArrow || (key.tab && key.shift)) && count > 0) {
+				setResumeIndex((prev) => (prev <= 0 ? count - 1 : prev - 1));
+				if (debug) setLastAction("resume: prev");
+				return;
+			}
+			if ((key.downArrow || (key.tab && !key.shift)) && count > 0) {
+				setResumeIndex((prev) => (prev + 1) % count);
+				if (debug) setLastAction("resume: next");
+				return;
+			}
+			if (key.return && !key.shift) {
+				if (resumeLoading) return;
+				if (count === 0) {
+					setResumeMenuOpen(false);
+					setResumeError(null);
+					if (debug) setLastAction("resume: close-empty");
+					return;
+				}
+				const idx = Math.max(0, Math.min(resumeIndex, count - 1));
+				const selection = resumeSessions[idx];
+				if (selection) {
+					if (debug) setLastAction(`resume: select ${selection.id}`);
+					void handleResumeSelection(selection);
+				}
+				return;
+			}
+			// swallow other keys while resume menu is open
+			return;
+		}
 		if (key.meta && pendingInterruptions.length > 0) {
 			if (inputKey === "[" || inputKey === "{") {
 				setPendingIndex((prev) => Math.max(0, prev - 1));
@@ -680,6 +904,34 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				);
 				if (debug) setLastAction("pending: reject");
 				return;
+			}
+		}
+		if (commandModeActive) {
+			const count = commandSuggestions.length;
+			if (key.escape) {
+				setInputAndCursor("");
+				setCommandIndex(0);
+				if (debug) setLastAction("command: cancel");
+				return;
+			}
+			if ((key.upArrow || (key.tab && key.shift)) && count > 0) {
+				setCommandIndex((prev) => (prev <= 0 ? count - 1 : prev - 1));
+				if (debug) setLastAction("command: prev");
+				return;
+			}
+			if ((key.downArrow || (key.tab && !key.shift)) && count > 0) {
+				setCommandIndex((prev) => (prev + 1) % count);
+				if (debug) setLastAction("command: next");
+				return;
+			}
+			if (key.return && !key.shift) {
+				const selected =
+					commandSuggestions[commandIndex] ?? commandSuggestions[0];
+				if (selected) {
+					if (debug) setLastAction(`command: run ${selected.id}`);
+					executeCommand(selected);
+					return;
+				}
 			}
 		}
 		// Toggle audio capture: Option/Alt (Meta) + A
@@ -983,6 +1235,38 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		}
 	}
 
+	React.useEffect(() => {
+		if (messages.length === 0) return;
+		const nowIso = new Date().toISOString();
+		const computedTitle = sessionTitleFromMessages(messages);
+		if (
+			!sessionTitleRef.current ||
+			sessionTitleRef.current === "New Session"
+		) {
+			sessionTitleRef.current = computedTitle;
+		}
+		const title =
+			sessionTitleRef.current && sessionTitleRef.current.trim().length > 0
+				? sessionTitleRef.current
+				: computedTitle;
+		sessionTitleRef.current = title;
+		const payload = {
+			id: sessionIdRef.current,
+			title,
+			createdAt: sessionCreatedAtRef.current,
+			updatedAt: nowIso,
+			messages: messages.map((msg) => ({
+				role: msg.role,
+				content: msg.content,
+				createdAt: nowIso,
+			})),
+		};
+		saveSession(payload).catch((err: any) => {
+			const message = err?.message || String(err);
+			appendEventLog("chat", `session_save_error ${message}`);
+		});
+	}, [messages, appendEventLog]);
+
 	// Refresh TODO panel when messages change (likely after tool runs)
 	React.useEffect(() => {
 		refreshTodos();
@@ -1222,6 +1506,54 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					lastFlags={lastFlags}
 					lastAction={lastAction}
 				/>
+				{commandModeActive && (
+					<Box flexDirection="column" marginTop={1}>
+						<Text color="gray">Commands</Text>
+						{commandSuggestions.length === 0 ? (
+							<Text color="gray">No commands match that input.</Text>
+						) : (
+							commandSuggestions.map((cmd, idx) => (
+								<Text
+									key={cmd.id}
+									color={idx === commandIndex ? "cyan" : "gray"}
+								>
+									{`${idx === commandIndex ? ">" : " "} ${
+										cmd.trigger
+									} — ${cmd.description}`}
+								</Text>
+							))
+						)}
+						<Text color="gray">
+							Use ↑/↓ or Tab to select, Enter to run, Esc to cancel.
+						</Text>
+					</Box>
+				)}
+				{resumeMenuOpen && (
+					<Box flexDirection="column" marginTop={1}>
+						<Text color="gray">
+							Resume Session (↑/↓ or Tab to choose, Enter to load, Esc to
+							cancel)
+						</Text>
+						{resumeLoading ? (
+							<Text color="gray">Loading sessions…</Text>
+						) : resumeError ? (
+							<Text color="red">{resumeError}</Text>
+						) : resumeSessions.length === 0 ? (
+							<Text color="gray">No saved sessions yet.</Text>
+						) : (
+							resumeSessions.map((session, idx) => (
+								<Text
+									key={session.id}
+									color={idx === resumeIndex ? "cyan" : "gray"}
+								>
+									{`${idx === resumeIndex ? ">" : " "} ${session.title} (${
+										new Date(session.updatedAt).toLocaleString() || ""
+									})`}
+								</Text>
+							))
+						)}
+					</Box>
+				)}
 			</Box>
 			<Box flexDirection="column" width={rightWidth} marginLeft={rightMargin}>
 				{audioEnabled && (
