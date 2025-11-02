@@ -9,7 +9,12 @@ import {
 	type RunState,
 } from "@openai/agents";
 import { defaultTools } from "./tools";
-import { listTodos, shortList, getFocus } from "./todoStore";
+import {
+	listTodos,
+	shortList,
+	getFocus,
+	completeAndRemoveOutstandingTodos,
+} from "./todoStore";
 import { loadConfig, saveConfig, type AppConfig } from "./config";
 import { startContinuousCapture, type CaptureMetrics } from "./audio";
 import { summarizeAudioContext } from "./summarizer";
@@ -484,7 +489,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				setResponse(`Error: ${msg}`);
 			} finally {
 				setIsStreaming(false);
-				refreshTodos().catch(() => {});
+				await cleanupTodosAfterTurn(source);
 				if (stream?.error) {
 					appendEventLog(source, `stream_error ${String(stream.error)}`);
 				} else if (stream) {
@@ -932,7 +937,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			appendEventLog("chat", `error ${msg}`);
 		} finally {
 			setIsStreaming(false);
-			refreshTodos().catch(() => {});
+			await cleanupTodosAfterTurn("chat");
 			if (stream?.error) {
 				appendEventLog("chat", `stream_error ${String(stream.error)}`);
 			} else if (stream) {
@@ -956,6 +961,25 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			setLingerIntervalSec(cfg.linger.minIntervalSec || 20);
 		} catch {
 			// ignore
+		}
+	}
+
+	async function cleanupTodosAfterTurn(source: "chat" | "linger") {
+		try {
+			const resolved = await completeAndRemoveOutstandingTodos();
+			if (resolved.length > 0) {
+				const ids = resolved.map((todo) => `#${todo.id}`).join(", ");
+				appendEventLog(source, `todos_autoresolved ${ids}`);
+			}
+		} catch (err: any) {
+			const msg = err?.message || String(err);
+			appendEventLog(source, `todos_autoresolve_error ${msg}`);
+		} finally {
+			try {
+				await refreshTodos();
+			} catch {
+				// ignore
+			}
 		}
 	}
 
@@ -1102,7 +1126,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			setResponse(`Error: ${msg}`);
 		} finally {
 			setIsStreaming(false);
-			refreshTodos().catch(() => {});
+			await cleanupTodosAfterTurn("linger");
 			if (stream?.error) {
 				appendEventLog("linger", `stream_error ${String(stream.error)}`);
 			} else if (stream) {

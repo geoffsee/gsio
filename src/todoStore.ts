@@ -249,6 +249,28 @@ export async function getFocus(): Promise<number | null> {
 	return store.focusedId ?? null;
 }
 
+export async function completeAndRemoveOutstandingTodos(): Promise<Todo[]> {
+	const store = await loadStore();
+	const remaining = store.items.filter((t) => t.status !== "done");
+	if (remaining.length === 0) return [];
+
+	const now = new Date();
+	const resolved: Todo[] = remaining.map((todo) => ({
+		...todo,
+		status: "done",
+		completedAt: now.toISOString(),
+	}));
+	const resolvedIds = new Set(resolved.map((todo) => todo.id));
+
+	store.items = store.items.filter((todo) => !resolvedIds.has(todo.id));
+	if (store.focusedId !== null && resolvedIds.has(store.focusedId)) {
+		store.focusedId = null;
+	}
+	await saveStore(store);
+
+	return resolved;
+}
+
 export function formatTodos(todos: Todo[]): string {
 	if (todos.length === 0) return "No todos.";
 	const statusIcon: Record<TodoStatus, string> = {

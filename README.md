@@ -5,6 +5,8 @@
 
 BYO Mechatronics
 
+![gsio.png](gsio.png)
+
 > Under active development. Expect breaking changes. If something isn't working, try stepping back a version. e.g `bunx gsio@0.1.10 <optional-subcommand>`
 
 ## Install
@@ -12,6 +14,8 @@ BYO Mechatronics
 ```bash
 $ npx gsio chat
 ```
+
+
 
 ## CLI
 
