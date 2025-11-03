@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+type ReasoningSummary = "auto" | "concise" | "detailed";
+type ThinkingVerbosity = "low" | "medium" | "high";
+
 export type AppConfig = {
 	ai: {
 		provider: "openai" | "ollama";
 		model: string; // default model to use for chat/summarization
 		baseUrl?: string; // override API base (e.g., http://localhost:11434/v1 for Ollama)
 		apiKey?: string; // optional override; for Ollama, can be any non-empty string
+		models: {
+			reasoning: string;
+			guidance: string;
+			execution: string;
+		};
 	};
 	shell: {
 		allowDangerous: boolean;
@@ -44,10 +53,30 @@ export type AppConfig = {
 		storageDir: string;
 		embeddingModel: string;
 	};
+	loops: {
+		reasoning: {
+			effort: ReasoningEffort;
+			summary: ReasoningSummary;
+		};
+		thinking: {
+			enabled: boolean;
+			verbosity: ThinkingVerbosity;
+		};
+	};
 };
 
 const DEFAULT_CONFIG: AppConfig = {
-	ai: { provider: "openai", model: "gpt-4o-mini", baseUrl: "", apiKey: "" },
+	ai: {
+		provider: "openai",
+		model: "gpt-4o-mini",
+		baseUrl: "",
+		apiKey: "",
+		models: {
+			reasoning: "o4-mini",
+			guidance: "gpt-4o",
+			execution: "gpt-4o-mini",
+		},
+	},
 	shell: { allowDangerous: false, extraAllowlist: [] },
 	panel: { todoShowCompleted: true, maxItems: 5 },
 	audio: {
@@ -79,7 +108,36 @@ const DEFAULT_CONFIG: AppConfig = {
 		storageDir: ".gsio-memory",
 		embeddingModel: "text-embedding-3-small",
 	},
+	loops: {
+		reasoning: {
+			effort: "medium",
+			summary: "concise",
+		},
+		thinking: {
+			enabled: false,
+			verbosity: "medium",
+		},
+	},
 };
+
+const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+] as const;
+
+const REASONING_SUMMARIES: readonly ReasoningSummary[] = [
+	"auto",
+	"concise",
+	"detailed",
+] as const;
+
+const THINKING_VERBOSITIES: readonly ThinkingVerbosity[] = [
+	"low",
+	"medium",
+	"high",
+] as const;
 
 const FILE_NAME = ".gsio-config.json";
 
@@ -108,15 +166,35 @@ export async function saveConfig(cfg: AppConfig): Promise<void> {
 }
 
 function normalizeConfig(input: any): AppConfig {
+	const providerIsOllama = input?.ai?.provider === "ollama";
+	const defaultExecutionModel = providerIsOllama
+		? "llama3.1:8b"
+		: DEFAULT_CONFIG.ai.models.execution;
+	const normalizedExecutionModel = normalizeModelString(
+		input?.ai?.models?.execution,
+		defaultExecutionModel
+	);
+	const normalizedReasoningModel = normalizeModelString(
+		input?.ai?.models?.reasoning,
+		providerIsOllama
+			? normalizedExecutionModel
+			: DEFAULT_CONFIG.ai.models.reasoning
+	);
+	const normalizedGuidanceModel = normalizeModelString(
+		input?.ai?.models?.guidance,
+		providerIsOllama
+			? normalizedExecutionModel
+			: DEFAULT_CONFIG.ai.models.guidance
+	);
+	const normalizedDefaultModel = normalizeModelString(
+		input?.ai?.model,
+		normalizedExecutionModel
+	);
+
 	const cfg: AppConfig = {
 		ai: {
 			provider: input?.ai?.provider === "ollama" ? "ollama" : "openai",
-			model:
-				typeof input?.ai?.model === "string" && input.ai.model.trim().length > 0
-					? String(input.ai.model)
-					: input?.ai?.provider === "ollama"
-					? "llama3.1:8b"
-					: DEFAULT_CONFIG.ai.model,
+			model: normalizedDefaultModel,
 			baseUrl:
 				typeof input?.ai?.baseUrl === "string"
 					? input.ai.baseUrl
@@ -125,6 +203,11 @@ function normalizeConfig(input: any): AppConfig {
 				typeof input?.ai?.apiKey === "string"
 					? input.ai.apiKey
 					: DEFAULT_CONFIG.ai.apiKey,
+			models: {
+				reasoning: normalizedReasoningModel,
+				guidance: normalizedGuidanceModel,
+				execution: normalizedExecutionModel,
+			},
 		},
 		shell: {
 			allowDangerous: !!input?.shell?.allowDangerous,
@@ -198,31 +281,62 @@ function normalizeConfig(input: any): AppConfig {
 						.filter((s: string) => s.length > 0)
 				: [],
 		},
-	memory: {
-		enabled: input?.memory?.enabled !== false,
-		userId:
-			typeof input?.memory?.userId === "string" &&
-			input.memory.userId.trim().length > 0
-				? String(input.memory.userId).trim()
-				: DEFAULT_CONFIG.memory.userId,
-		maxEntries: clampInt(
-			input?.memory?.maxEntries,
-			50,
-			5000,
-			DEFAULT_CONFIG.memory.maxEntries
-		),
-		storageDir:
-			typeof input?.memory?.storageDir === "string" &&
-			input.memory.storageDir.trim().length > 0
-				? String(input.memory.storageDir).trim()
-				: DEFAULT_CONFIG.memory.storageDir,
-		embeddingModel:
-			typeof input?.memory?.embeddingModel === "string" &&
-			input.memory.embeddingModel.trim().length > 0
-				? String(input.memory.embeddingModel).trim()
-				: DEFAULT_CONFIG.memory.embeddingModel,
-	},
-};
+		memory: {
+			enabled: input?.memory?.enabled !== false,
+			userId:
+				typeof input?.memory?.userId === "string" &&
+				input.memory.userId.trim().length > 0
+					? String(input.memory.userId).trim()
+					: DEFAULT_CONFIG.memory.userId,
+			maxEntries: clampInt(
+				input?.memory?.maxEntries,
+				50,
+				5000,
+				DEFAULT_CONFIG.memory.maxEntries
+			),
+			storageDir:
+				typeof input?.memory?.storageDir === "string" &&
+				input.memory.storageDir.trim().length > 0
+					? String(input.memory.storageDir).trim()
+					: DEFAULT_CONFIG.memory.storageDir,
+			embeddingModel:
+				typeof input?.memory?.embeddingModel === "string" &&
+				input.memory.embeddingModel.trim().length > 0
+					? String(input.memory.embeddingModel).trim()
+					: DEFAULT_CONFIG.memory.embeddingModel,
+		},
+		loops: {
+			reasoning: {
+				effort:
+					typeof input?.loops?.reasoning?.effort === "string" &&
+					REASONING_EFFORTS.includes(
+						input.loops.reasoning.effort as ReasoningEffort
+					)
+						? (input.loops.reasoning.effort as ReasoningEffort)
+						: DEFAULT_CONFIG.loops.reasoning.effort,
+				summary:
+					typeof input?.loops?.reasoning?.summary === "string" &&
+					REASONING_SUMMARIES.includes(
+						input.loops.reasoning.summary as ReasoningSummary
+					)
+						? (input.loops.reasoning.summary as ReasoningSummary)
+						: DEFAULT_CONFIG.loops.reasoning.summary,
+			},
+			thinking: {
+				enabled:
+					input?.loops?.thinking?.enabled === undefined
+						? DEFAULT_CONFIG.loops.thinking.enabled
+						: Boolean(input.loops.thinking.enabled),
+				verbosity:
+					typeof input?.loops?.thinking?.verbosity === "string" &&
+					THINKING_VERBOSITIES.includes(
+						input.loops.thinking.verbosity as ThinkingVerbosity
+					)
+						? (input.loops.thinking.verbosity as ThinkingVerbosity)
+						: DEFAULT_CONFIG.loops.thinking.verbosity,
+			},
+		},
+	};
 	cfg.tools.requireApproval = Array.from(
 		new Set([
 			...cfg.tools.requireApproval,
@@ -236,4 +350,11 @@ function clampInt(v: any, min: number, max: number, def: number): number {
 	const n = Number(v);
 	if (!Number.isInteger(n)) return def;
 	return Math.max(min, Math.min(max, n));
+}
+
+function normalizeModelString(value: any, fallback: string): string {
+	if (typeof value === "string" && value.trim().length > 0) {
+		return value.trim();
+	}
+	return fallback;
 }

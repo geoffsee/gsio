@@ -3,10 +3,15 @@ import { Box, Newline, Text, useInput, useStdout } from "ink";
 import {
 	Agent,
 	run,
+	user,
+	assistant,
+	system,
 	type StreamedRunResult,
 	type RunStreamEvent,
 	type RunToolApprovalItem,
 	type RunState,
+	type AgentInputItem,
+	type ModelSettings,
 } from "@openai/agents";
 import { defaultTools } from "./tools";
 import {
@@ -53,6 +58,88 @@ type MemorySettings = {
 	storageDir: string;
 	embeddingModel: string;
 };
+
+type ReasoningEffort = AppConfig["loops"]["reasoning"]["effort"];
+type ReasoningSummary = AppConfig["loops"]["reasoning"]["summary"];
+type ThinkingVerbosity = AppConfig["loops"]["thinking"]["verbosity"];
+type PromptContext = {
+	prompt: string;
+	memoryContext: string | null;
+};
+
+function buildSocraticReasoningSummary(args: {
+	userPrompt: string;
+	planText: string;
+	guidanceText: string;
+}): string {
+	const { userPrompt, planText, guidanceText } = args;
+	const cleanPlan = planText
+		.replace(/^Plan:\s*/i, "")
+		.trim();
+	const steps = cleanPlan
+		.split(/\n+/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (steps.length === 0) return "";
+
+	const qaPairs: string[] = [];
+	for (let i = 0; i < steps.length; i++) {
+		const step = steps[i].replace(/^\d+[\).\-\:]\s*/, "").trim();
+		if (!step) continue;
+		const question = `Q${i + 1}: Why is step ${i + 1} necessary?`;
+		const answer = `A${i + 1}: ${step}.`;
+		qaPairs.push(`${question} ${answer}`);
+	}
+
+	let guidanceNotes = "";
+	const condensedGuidance = guidanceText
+		.replace(/^Implementation Guidance:\s*/i, "")
+		.trim();
+	if (condensedGuidance) {
+		const sentences = condensedGuidance
+			.split(/(?<=[.?!])\s+/)
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.slice(0, 3);
+		if (sentences.length > 0) {
+			guidanceNotes = `Follow-up prompts:\n${sentences
+				.map((s, idx) => `• Clarify ${idx + 1}: ${s}`)
+				.join("\n")}`;
+		}
+	}
+
+	const closing = `Conclusion: This plan addresses "${userPrompt.trim()}" by progressing through the numbered inquiries above.`;
+
+	return [qaPairs.join("\n"), guidanceNotes, closing]
+		.filter(Boolean)
+		.join("\n\n");
+}
+
+function isReasoningAccessError(text: string | null | undefined): boolean {
+	if (!text) return false;
+	const normalized = text.toLowerCase();
+	return normalized.includes(
+		"your organization must be verified to generate reasoning summaries"
+	);
+}
+
+const TODO_TOOL_INSTRUCTIONS = [
+	"You can manage a persistent todo list stored in the current working directory using tools:",
+	"- todo_add(text): Add a new todo",
+	"- todo_list(includeCompleted=true): List todos",
+	"- todo_complete(id): Mark a todo done",
+	"- todo_remove(id): Remove a todo",
+	"- todo_update(id, text): Update todo text",
+	"- todo_clear_all(): Remove all todos",
+	"- todo_set_status(id, status, blockedReason?): Set status",
+	"- todo_set_priority(id, priority 1..5): Set priority",
+	"- todo_add_note(id, note): Append a note",
+	"- todo_link_dep(id, dependsOnId) / todo_unlink_dep(id, dependsOnId): Dependencies",
+	"- todo_focus(id|0): Focus a todo or clear focus",
+	"- todo_plan(steps[]): Bulk-add steps for planning",
+	"Keep responses short and show the resulting list when appropriate.",
+	"For files, stay within the working directory.",
+] as const;
 
 export const Chat = ({ debug = false }: ChatProps) => {
 	const { stdout } = useStdout();
@@ -103,43 +190,190 @@ export const Chat = ({ debug = false }: ChatProps) => {
 	const [memoryHasError, setMemoryHasError] = useState<boolean>(false);
 	const [memoryEmbeddingModel, setMemoryEmbeddingModel] =
 		useState<string>("text-embedding-3-small");
+	const [reasoningEffort, setReasoningEffort] =
+		useState<ReasoningEffort>("medium");
+	const [reasoningSummary, setReasoningSummary] =
+		useState<ReasoningSummary>("concise");
+	const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(false);
+	const [thinkingVerbosity, setThinkingVerbosity] =
+		useState<ThinkingVerbosity>("medium");
+	const [allowReasoningSummary, setAllowReasoningSummary] =
+		useState<boolean>(true);
+	const allowReasoningSummaryRef = React.useRef<boolean>(true);
+	const reasoningNoticePostedRef = React.useRef<boolean>(false);
+	const [reasoningModel, setReasoningModel] = useState<string>("o4-mini");
+	const [guidanceModel, setGuidanceModel] = useState<string>("gpt-4o");
+	const [executionModel, setExecutionModel] =
+		useState<string>("gpt-4o-mini");
 
-	const agent = React.useMemo(() => {
+	React.useEffect(() => {
+		allowReasoningSummaryRef.current = allowReasoningSummary;
+	}, [allowReasoningSummary]);
+
+	const planningAgent = React.useMemo(() => {
 		const audioLine = audioEnabled
 			? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
 			: "";
 		const memoryLine = memoryEnabled
 			? `Long-term memory is available; prioritize consistency with recalled context. Embedding model: ${memoryEmbeddingModel}.`
 			: "";
+		const summaryLine = audioSummary
+			? `Recent audio context summary: ${audioSummary}`
+			: "";
+		const modelSettings: ModelSettings = { toolChoice: "none" };
+		const includeReasoningSettings =
+			allowReasoningSummary && reasoningModel.startsWith("o4");
+		if (includeReasoningSettings) {
+			modelSettings.reasoning = {
+				effort: reasoningEffort,
+				summary: reasoningSummary,
+			};
+		}
+		if (thinkingEnabled) {
+			modelSettings.text = { verbosity: thinkingVerbosity };
+		}
+		const instructions = [
+			"You are the planning specialist. Break down the latest user request into a concise, numbered plan before any work begins.",
+			"Capture dependencies, data that must be gathered, and TODO updates when relevant. Do not execute tasks or modify files—only plan.",
+			allowReasoningSummary
+				? ""
+				: "Reasoning summaries are currently disabled; produce a clear plan without them.",
+			audioLine,
+			memoryLine,
+			summaryLine,
+			...TODO_TOOL_INSTRUCTIONS,
+		]
+			.filter(Boolean)
+			.join("\n");
+		const modelChoice = allowReasoningSummary ? reasoningModel : guidanceModel;
+		return new Agent({
+			name: "Planner",
+			instructions,
+			tools: defaultTools,
+			model: modelChoice,
+			modelSettings,
+		});
+	}, [
+		audioEnabled,
+		audioSummary,
+		memoryEnabled,
+			memoryEmbeddingModel,
+			reasoningEffort,
+			reasoningSummary,
+			thinkingEnabled,
+			thinkingVerbosity,
+			allowReasoningSummary,
+			reasoningModel,
+		]);
+
+	const guidanceAgent = React.useMemo(() => {
+		const audioLine = audioEnabled
+			? "Audio context capture is enabled; incorporate relevant auditory information if provided."
+			: "";
+		const memoryLine = memoryEnabled
+			? `Long-term memory is available; keep guidance consistent with recalled context. Embedding model: ${memoryEmbeddingModel}.`
+			: "";
+		const summaryLine = audioSummary
+			? `Recent audio context summary: ${audioSummary}`
+			: "";
+		const modelSettings: ModelSettings = {
+			toolChoice: "none",
+		};
+		if (thinkingEnabled) {
+			modelSettings.text = { verbosity: thinkingVerbosity };
+		}
+		const instructions = [
+			"You are the implementation guide. Review the latest plan in this conversation and provide actionable guidance for carrying it out.",
+			"Highlight best practices, sequencing, potential pitfalls, validation steps, and recommended tool/TODO usage. Do not perform the work—respond with guidance only.",
+			audioLine,
+			memoryLine,
+			summaryLine,
+			...TODO_TOOL_INSTRUCTIONS,
+		]
+			.filter(Boolean)
+			.join("\n");
+		return new Agent({
+			name: "Guide",
+			instructions,
+			tools: defaultTools,
+			model: guidanceModel,
+			modelSettings,
+		});
+	}, [
+		audioEnabled,
+		audioSummary,
+		memoryEnabled,
+		memoryEmbeddingModel,
+		thinkingEnabled,
+		thinkingVerbosity,
+		guidanceModel,
+	]);
+
+	const executionAgent = React.useMemo(() => {
+		const audioLine = audioEnabled
+			? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
+			: "";
+		const memoryLine = memoryEnabled
+			? `Long-term memory is available; prioritize consistency with recalled context. Embedding model: ${memoryEmbeddingModel}.`
+			: "";
+		const summaryLine = audioSummary
+			? `Recent audio context summary: ${audioSummary}`
+			: "";
+		const includeReasoningSettings =
+			allowReasoningSummary && executionModel.startsWith("o4");
+		const reasoningLine = includeReasoningSettings
+			? `Reasoning loop is mandatory (effort: ${reasoningEffort}, summary: ${reasoningSummary}). Run a structured reasoning pass before finalizing answers.`
+			: "Use deliberate internal reflection to check your work before finalizing; external reasoning summaries are not available.";
+		const thinkingLine = thinkingEnabled
+			? `Thinking loop is enabled (verbosity: ${thinkingVerbosity}). When tasks are complex or ambiguous, take an additional thinking pass before responding.`
+			: "Thinking loop is disabled unless deeper reflection is explicitly requested.";
+		const planReminder =
+			"Before responding, review the most recent plan and implementation guidance produced earlier in this turn. Follow them unless there is a compelling reason to adjust (and explain any adjustments).";
+		const instructions = [
+			"You are a helpful assistant. Use tools when helpful. Prefer concise answers.",
+			planReminder,
+			"Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.",
+			reasoningLine,
+			thinkingLine,
+			allowReasoningSummary
+				? ""
+				: "Reasoning summaries are temporarily disabled; continue executing without them.",
+			audioLine,
+			memoryLine,
+			summaryLine,
+			...TODO_TOOL_INSTRUCTIONS,
+		]
+			.filter(Boolean)
+			.join("\n");
+		const modelSettings: ModelSettings = {};
+		if (includeReasoningSettings) {
+			modelSettings.reasoning = {
+				effort: reasoningEffort,
+				summary: reasoningSummary,
+			};
+		}
+		if (thinkingEnabled) {
+			modelSettings.text = { verbosity: thinkingVerbosity };
+		}
 		return new Agent({
 			name: "Assistant",
-			instructions: [
-				"You are a helpful assistant. Use tools when helpful. Prefer concise answers.",
-				"Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.",
-				audioLine,
-				memoryLine,
-				audioSummary ? `Recent audio context summary: ${audioSummary}` : "",
-				"You can manage a persistent todo list stored in the current working directory using tools:",
-				"- todo_add(text): Add a new todo",
-				"- todo_list(includeCompleted=true): List todos",
-				"- todo_complete(id): Mark a todo done",
-				"- todo_remove(id): Remove a todo",
-				"- todo_update(id, text): Update todo text",
-				"- todo_clear_all(): Remove all todos",
-				"- todo_set_status(id, status, blockedReason?): Set status",
-				"- todo_set_priority(id, priority 1..5): Set priority",
-				"- todo_add_note(id, note): Append a note",
-				"- todo_link_dep(id, dependsOnId) / todo_unlink_dep(id, dependsOnId): Dependencies",
-				"- todo_focus(id|0): Focus a todo or clear focus",
-				"- todo_plan(steps[]): Bulk-add steps for planning",
-				"Keep responses short and show the resulting list when appropriate.",
-				"For files, stay within the working directory.",
-			]
-				.filter(Boolean)
-				.join("\n"),
+			instructions,
 			tools: defaultTools,
+			model: executionModel,
+			modelSettings,
 		});
-	}, [audioEnabled, audioSummary, memoryEnabled, memoryEmbeddingModel]);
+	}, [
+		audioEnabled,
+		audioSummary,
+		memoryEnabled,
+		memoryEmbeddingModel,
+		reasoningEffort,
+			reasoningSummary,
+			thinkingEnabled,
+			thinkingVerbosity,
+			allowReasoningSummary,
+			executionModel,
+		]);
 
 	const appendAudioLog = React.useCallback((msg: string) => {
 		const ts = new Date().toLocaleTimeString();
@@ -228,14 +462,18 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		[appendEventLog]
 	);
 
-	const applyMemoryToPrompt = React.useCallback(
-		async (history: Message[], prompt: string, source: "chat" | "linger") => {
+	const preparePromptContext = React.useCallback(
+		async (
+			history: Message[],
+			prompt: string,
+			source: "chat" | "linger"
+		): Promise<PromptContext> => {
 			const memory = memoryRef.current;
-			if (!memory) return prompt;
+			if (!memory) return { prompt, memoryContext: null };
 			const usable = history.filter(
 				(msg) => msg.content && msg.content.trim().length > 0
 			);
-			if (usable.length === 0) return prompt;
+			if (usable.length === 0) return { prompt, memoryContext: null };
 			try {
 				const recall = await memory.recall(toMemoryMessages(usable), {
 					topK: 3,
@@ -243,7 +481,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					maxTokens: 600,
 				});
 				if (!recall || recall.trim().length === 0) {
-					return prompt;
+					return { prompt, memoryContext: null };
 				}
 				setMemoryHasError(false);
 				setMemoryStatusText("active");
@@ -251,16 +489,106 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					source,
 					`memory_recall ${Math.max(1, Math.round(recall.length / 4))} tokens`
 				);
-				return `Relevant memory:\n${recall}\n\nCurrent request:\n${prompt}`;
+				return {
+					prompt,
+					memoryContext: `Relevant memory:\n${recall}`,
+				};
 			} catch (err: any) {
 				const msg = err?.message || String(err);
 				setMemoryHasError(true);
 				setMemoryStatusText(`error: ${msg}`);
 				appendEventLog(source, `memory_recall_error ${msg}`);
-				return prompt;
+				return { prompt, memoryContext: null };
 			}
 		},
 		[appendEventLog, toMemoryMessages]
+	);
+
+	const buildRunInput = React.useCallback(
+		async (
+			history: Message[],
+			prompt: string,
+			source: "chat" | "linger"
+		): Promise<{ inputItems: AgentInputItem[]; normalizedPrompt: string }> => {
+			const { prompt: normalizedPrompt, memoryContext } =
+				await preparePromptContext(history, prompt, source);
+			const items: AgentInputItem[] = [];
+			if (memoryContext && memoryContext.trim().length > 0) {
+				items.push(
+					system(
+						`${memoryContext.trim()}\nUse this alongside the latest conversation turns.`
+					)
+				);
+			}
+			const contextMessages = history.slice(Math.max(0, history.length - 2));
+			for (const msg of contextMessages) {
+				const content = (msg.content ?? "").trim();
+				if (!content) continue;
+				if (msg.role === "user") {
+					items.push(user(content));
+				} else {
+					items.push(assistant(content));
+				}
+			}
+			const lastContext = contextMessages[contextMessages.length - 1];
+			const trimmedPrompt = normalizedPrompt.trim();
+			if (trimmedPrompt.length > 0) {
+				const lastContent = (lastContext?.content ?? "").trim();
+				if (!lastContext || lastContext.role !== "user" || lastContent !== trimmedPrompt) {
+					items.push(user(trimmedPrompt));
+				}
+			}
+			if (items.length === 0 && trimmedPrompt.length > 0) {
+				items.push(user(trimmedPrompt));
+			}
+			return { inputItems: items, normalizedPrompt };
+		},
+		[preparePromptContext]
+	);
+
+	const extractErrorMessage = React.useCallback((err: any): string => {
+		return (
+			err?.message ||
+			err?.response?.data?.error?.message ||
+			err?.response?.data?.error?.error?.message ||
+			String(err)
+		);
+	}, []);
+
+	const handleReasoningSummaryError = React.useCallback(
+		(err: any, source: "chat" | "linger") => {
+			if (!allowReasoningSummaryRef.current) return false;
+			const msg = extractErrorMessage(err);
+			if (
+				typeof msg === "string" &&
+				msg
+					.toLowerCase()
+					.includes(
+						"your organization must be verified to generate reasoning summaries"
+					)
+			) {
+				allowReasoningSummaryRef.current = false;
+				setAllowReasoningSummary(false);
+				appendEventLog(
+					source,
+					"reasoning_summary_disabled (org not verified; retrying without summaries)"
+				);
+				if (!reasoningNoticePostedRef.current) {
+					reasoningNoticePostedRef.current = true;
+					setMessages((prev) => [
+						...prev,
+						{
+							role: "assistant",
+							content:
+								"(Reasoning summaries unavailable: switching to internal reflection until verification completes.)",
+						},
+					]);
+				}
+				return true;
+			}
+			return false;
+		},
+		[appendEventLog, extractErrorMessage, setMessages]
 	);
 
 	const memorizeExchange = React.useCallback(
@@ -382,7 +710,12 @@ export const Chat = ({ debug = false }: ChatProps) => {
 	);
 
 	const consumeStream = React.useCallback(
-		async (stream: StreamedRunResult<any, any>, source: "chat" | "linger") => {
+		async (
+			stream: StreamedRunResult<any, any>,
+			source: "chat" | "linger",
+			options?: { live?: boolean; onUpdate?: (full: string) => void }
+		) => {
+			const live = options?.live ?? true;
 			let full = "";
 			for await (const event of stream) {
 				logStreamEvent(source, event);
@@ -393,7 +726,8 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					const delta = event.data.delta;
 					if (delta) {
 						full += delta;
-						setResponse(full);
+						options?.onUpdate?.(full);
+						if (live) setResponse(full);
 					}
 				} else if (
 					(event as any).type === "output_text_delta" &&
@@ -401,7 +735,8 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				) {
 					const delta = (event as any).delta as string;
 					full += delta;
-					setResponse(full);
+					options?.onUpdate?.(full);
+					if (live) setResponse(full);
 				}
 			}
 			return full;
@@ -448,11 +783,19 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			setResponse("");
 			let stream: StreamedRunResult<any, any> | null = null;
 			const runOptions = { stream: true as const, maxTurns: 30 };
-			try {
-				stream = await run(agent, state, runOptions);
-				const full = await consumeStream(stream, source);
-				if (stream.interruptions?.length) {
-					handleInterruptions(
+			let retryWithoutSummary = false;
+				try {
+			stream = await run(executionAgent, state, runOptions);
+			const full = await consumeStream(stream, source);
+			if (isReasoningAccessError(full)) {
+				const err = new Error(full);
+				if (handleReasoningSummaryError(err, source)) {
+					retryWithoutSummary = true;
+					throw err;
+				}
+			}
+					if (stream.interruptions?.length) {
+						handleInterruptions(
 						source,
 						stream.interruptions as RunToolApprovalItem[],
 						stream.state
@@ -476,29 +819,50 @@ export const Chat = ({ debug = false }: ChatProps) => {
 							],
 							source
 						);
-					}
-					return nextDisplay;
-				});
+						}
+						return nextDisplay;
+					});
 			} catch (err: any) {
-				const msg = err?.message || "Unknown error";
-				appendEventLog(source, `error ${msg}`);
-				setMessages((m: Message[]) => [
-					...m,
-					{ role: "assistant", content: `Error: ${msg}` },
-				]);
-				setResponse(`Error: ${msg}`);
-			} finally {
-				setIsStreaming(false);
-				await cleanupTodosAfterTurn(source);
-				if (stream?.error) {
-					appendEventLog(source, `stream_error ${String(stream.error)}`);
-				} else if (stream) {
-					appendEventLog(source, "stream_complete");
+				const msg = extractErrorMessage(err) || "Unknown error";
+				const suppressed =
+					handleReasoningSummaryError(err, source) ||
+					(!allowReasoningSummaryRef.current &&
+						isReasoningAccessError(msg));
+				if (suppressed) {
+					retryWithoutSummary = true;
+				} else {
+					appendEventLog(source, `error ${msg}`);
+					setMessages((m: Message[]) => [
+						...m,
+						{ role: "assistant", content: `Error: ${msg}` },
+					]);
+					setResponse(`Error: ${msg}`);
 				}
-			}
-		},
-		[agent, consumeStream, appendEventLog, handleInterruptions]
-	);
+				} finally {
+					setIsStreaming(false);
+					await cleanupTodosAfterTurn(source);
+					if (retryWithoutSummary) {
+						setTimeout(() => {
+							void resumeStream(state, source);
+						}, 0);
+						return;
+					}
+					if (stream?.error) {
+						appendEventLog(source, `stream_error ${String(stream.error)}`);
+					} else if (stream) {
+						appendEventLog(source, "stream_complete");
+					}
+				}
+			},
+			[
+				executionAgent,
+				consumeStream,
+				appendEventLog,
+				handleInterruptions,
+				handleReasoningSummaryError,
+				extractErrorMessage,
+			]
+		);
 
 	const handlePendingDecision = React.useCallback(
 		async (action: "approve" | "reject", always: boolean) => {
@@ -886,61 +1250,228 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		}
 	});
 
-	// Stream response from OpenAI
+	// Stream response through planning → guidance → execution phases
 	const streamResponse = async (chatHistory: Message[]) => {
 		setIsStreaming(true);
 		setResponse("");
 
-		const lastMessage = chatHistory[chatHistory.length - 1]?.content || "";
-		let stream: StreamedRunResult<any, any> | null = null;
+		const runOptions = { stream: true as const, maxTurns: 30 };
+		let planningStream: StreamedRunResult<any, any> | null = null;
+		let guidanceStream: StreamedRunResult<any, any> | null = null;
+		let executionStream: StreamedRunResult<any, any> | null = null;
+		let retryWithoutSummary = false;
+		let lastPlanText = "";
+		let lastGuidanceText = "";
 
-			const runOptions = { stream: true as const, maxTurns: 30 };
-			try {
-				const promptWithMemory = await applyMemoryToPrompt(
-					chatHistory,
-					lastMessage,
+		let workingHistory: Message[] = [...chatHistory];
+		const userPrompt = chatHistory[chatHistory.length - 1]?.content || "";
+
+		try {
+			if (!allowReasoningSummaryRef.current) {
+				const internalNotice: Message = {
+					role: "assistant",
+					content:
+						"(Internal reasoning: executing without shared summaries…) ",
+				};
+				const interimHistory = [...chatHistory, internalNotice];
+				setMessages(interimHistory);
+				const executionInput = await buildRunInput(
+					interimHistory,
+					userPrompt,
 					"chat"
 				);
-				stream = await run(agent, promptWithMemory, runOptions);
-			const fullResponse = await consumeStream(stream, "chat");
-			if (stream.interruptions?.length) {
+				executionStream = await run(
+					executionAgent,
+					executionInput.inputItems,
+					runOptions
+				);
+				const fullResponse = await consumeStream(executionStream, "chat");
+				const assistantContent =
+					(fullResponse ?? "").trim().length > 0 ? fullResponse : "";
+				const displayMessages: Message[] = [
+					...interimHistory,
+					{
+						role: "assistant",
+						content: assistantContent || "(no response)",
+					},
+				];
+				setMessages(displayMessages);
+				if (assistantContent) {
+					await memorizeExchange(displayMessages, "chat");
+				}
+				appendEventLog(
+					"chat",
+					"reasoning_plan_skipped (summaries unavailable)"
+				);
+				return;
+			}
+
+			// Planning phase (reasoning model)
+			const planInput = await buildRunInput(workingHistory, userPrompt, "chat");
+			planningStream = await run(planningAgent, planInput.inputItems, runOptions);
+			let planText = await consumeStream(planningStream, "chat", {
+				live: false,
+			});
+			if (isReasoningAccessError(planText)) {
+				const err = new Error(planText);
+				if (handleReasoningSummaryError(err, "chat")) {
+					retryWithoutSummary = true;
+					throw err;
+				}
+			}
+			if (planningStream.interruptions?.length) {
 				handleInterruptions(
 					"chat",
-					stream.interruptions as RunToolApprovalItem[],
-					stream.state
+					planningStream.interruptions as RunToolApprovalItem[],
+					planningStream.state
+				);
+				return;
+			}
+				planText = planText.trim();
+				if (planText) {
+					const planMessage: Message = {
+						role: "assistant",
+						content: `Plan:\n${planText}`,
+					};
+					workingHistory = [...workingHistory, planMessage];
+					setMessages(workingHistory);
+					lastPlanText = planText;
+				}
+
+				// Guidance phase (large model)
+				const guidancePrompt =
+					"Provide implementation guidance that elaborates on the plan above. Outline sequencing, key considerations, validations, and recommended tool/TODO usage. Do not perform the work.";
+			const guidanceHistory = [
+				...workingHistory,
+				{ role: "user" as const, content: guidancePrompt },
+			];
+			const guidanceInput = await buildRunInput(
+				guidanceHistory,
+				guidancePrompt,
+				"chat"
+			);
+			guidanceStream = await run(
+				guidanceAgent,
+				guidanceInput.inputItems,
+				runOptions
+			);
+			let guidanceText = await consumeStream(guidanceStream, "chat", {
+				live: false,
+			});
+			if (isReasoningAccessError(guidanceText)) {
+				const err = new Error(guidanceText);
+				if (handleReasoningSummaryError(err, "chat")) {
+					retryWithoutSummary = true;
+					throw err;
+				}
+			}
+			if (guidanceStream.interruptions?.length) {
+				handleInterruptions(
+					"chat",
+					guidanceStream.interruptions as RunToolApprovalItem[],
+					guidanceStream.state
+				);
+				return;
+			}
+				guidanceText = guidanceText.trim();
+				if (guidanceText) {
+					const guidanceMessage: Message = {
+						role: "assistant",
+						content: `Implementation Guidance:\n${guidanceText}`,
+					};
+					workingHistory = [...workingHistory, guidanceMessage];
+					setMessages(workingHistory);
+					lastGuidanceText = guidanceText;
+				}
+
+				if (!allowReasoningSummaryRef.current && lastPlanText) {
+					const polyfill = buildSocraticReasoningSummary({
+						userPrompt,
+						planText: lastPlanText,
+						guidanceText: lastGuidanceText,
+					});
+					if (polyfill.trim().length > 0) {
+						const reasoningMessage: Message = {
+							role: "assistant",
+							content: `Reasoning (Socratic polyfill):\n${polyfill}`,
+						};
+						workingHistory = [...workingHistory, reasoningMessage];
+						setMessages(workingHistory);
+						appendEventLog(
+							"chat",
+							"reasoning_polyfill_created (socratic)"
+						);
+					}
+				}
+
+				// Execution phase (small model)
+				const executionInput = await buildRunInput(
+					workingHistory,
+				userPrompt,
+				"chat"
+			);
+			executionStream = await run(
+				executionAgent,
+				executionInput.inputItems,
+				runOptions
+			);
+			const fullResponse = await consumeStream(executionStream, "chat");
+			if (isReasoningAccessError(fullResponse)) {
+				const err = new Error(fullResponse);
+				if (handleReasoningSummaryError(err, "chat")) {
+					retryWithoutSummary = true;
+					throw err;
+				}
+			}
+			if (executionStream.interruptions?.length) {
+				handleInterruptions(
+					"chat",
+					executionStream.interruptions as RunToolApprovalItem[],
+					executionStream.state
 				);
 			}
 			const assistantContent =
 				(fullResponse ?? "").trim().length > 0 ? fullResponse : "";
-			const displayMessages = [
-				...chatHistory,
+			const displayMessages: Message[] = [
+				...workingHistory,
 				{
 					role: "assistant",
 					content: assistantContent || "(no response)",
 				},
-			] as Message[];
-			setMessages(displayMessages as any);
+			];
+			workingHistory = displayMessages;
+			setMessages(displayMessages);
 			if (assistantContent) {
-				const storedMessages = [
-					...chatHistory,
-					{ role: "assistant", content: assistantContent },
-				] as Message[];
-				await memorizeExchange(storedMessages, "chat");
+				await memorizeExchange(displayMessages, "chat");
 			}
 		} catch (err: any) {
-			const msg = err?.message || "Unknown error";
-			setMessages([
-				...chatHistory,
-				{ role: "assistant", content: `Error: ${msg}` },
-			]);
-			setResponse(`Error: ${msg}`);
-			appendEventLog("chat", `error ${msg}`);
+			const msg = extractErrorMessage(err) || "Unknown error";
+			const suppressed = handleReasoningSummaryError(err, "chat") ||
+				(!allowReasoningSummaryRef.current && isReasoningAccessError(msg));
+			if (suppressed) {
+				retryWithoutSummary = true;
+			} else {
+				const errorMessage: Message = {
+					role: "assistant",
+					content: `Error: ${msg}`,
+				};
+				workingHistory = [...workingHistory, errorMessage];
+				setMessages(workingHistory);
+				setResponse(`Error: ${msg}`);
+				appendEventLog("chat", `error ${msg}`);
+			}
 		} finally {
 			setIsStreaming(false);
 			await cleanupTodosAfterTurn("chat");
-			if (stream?.error) {
-				appendEventLog("chat", `stream_error ${String(stream.error)}`);
-			} else if (stream) {
+			if (retryWithoutSummary) {
+				setTimeout(() => {
+					void streamResponse(chatHistory);
+				}, 0);
+				return;
+			}
+			if (executionStream?.error) {
+				appendEventLog("chat", `stream_error ${String(executionStream.error)}`);
+			} else if (executionStream) {
 				appendEventLog("chat", "stream_complete");
 			}
 		}
@@ -959,6 +1490,19 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			setLingerEnabled(!!cfg.linger.enabled);
 			setLingerBehavior(cfg.linger.behavior || "");
 			setLingerIntervalSec(cfg.linger.minIntervalSec || 20);
+			setReasoningEffort(cfg.loops.reasoning.effort);
+			setReasoningSummary(cfg.loops.reasoning.summary);
+			setThinkingEnabled(!!cfg.loops.thinking.enabled);
+			setThinkingVerbosity(cfg.loops.thinking.verbosity);
+			setReasoningModel(
+				cfg.ai.models?.reasoning || cfg.ai.model || "o4-mini"
+			);
+			setGuidanceModel(
+				cfg.ai.models?.guidance || cfg.ai.model || "gpt-4o"
+			);
+			setExecutionModel(
+				cfg.ai.models?.execution || cfg.ai.model || "gpt-4o-mini"
+			);
 		} catch {
 			// ignore
 		}
@@ -1079,15 +1623,23 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		setResponse("");
 
 		let stream: StreamedRunResult<any, any> | null = null;
+		let retryWithoutSummary = false;
 			const runOptions = { stream: true as const, maxTurns: 30 };
 			try {
-				const promptWithMemory = await applyMemoryToPrompt(
-					newMessages,
-					instruction,
-					"linger"
-				);
-				stream = await run(agent, promptWithMemory, runOptions);
+			const { inputItems } = await buildRunInput(
+				newMessages,
+				instruction,
+				"linger"
+			);
+			stream = await run(executionAgent, inputItems, runOptions);
 			const full = await consumeStream(stream, "linger");
+			if (isReasoningAccessError(full)) {
+				const err = new Error(full);
+				if (handleReasoningSummaryError(err, "linger")) {
+					retryWithoutSummary = true;
+					throw err;
+				}
+			}
 			if (stream.interruptions?.length) {
 				handleInterruptions(
 					"linger",
@@ -1117,17 +1669,30 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				return nextDisplay;
 			});
 		} catch (err: any) {
-			const msg = err?.message || "Unknown error";
-			appendEventLog("linger", `error ${msg}`);
-			setMessages((m: Message[]) => [
-				...m,
-				{ role: "assistant", content: `Linger error: ${msg}` },
-			]);
-			setResponse(`Error: ${msg}`);
+			const msg = extractErrorMessage(err) || "Unknown error";
+			const suppressed =
+				handleReasoningSummaryError(err, "linger") ||
+				(!allowReasoningSummaryRef.current && isReasoningAccessError(msg));
+			if (suppressed) {
+				retryWithoutSummary = true;
+			} else {
+				appendEventLog("linger", `error ${msg}`);
+				setMessages((m: Message[]) => [
+					...m,
+					{ role: "assistant", content: `Linger error: ${msg}` },
+				]);
+				setResponse(`Error: ${msg}`);
+			}
 		} finally {
 			setIsStreaming(false);
 			await cleanupTodosAfterTurn("linger");
-			if (stream?.error) {
+			if (retryWithoutSummary) {
+				setTimeout(() => {
+							void runLinger(latestUtterance);
+						}, 0);
+						return;
+					}
+					if (stream?.error) {
 				appendEventLog("linger", `stream_error ${String(stream.error)}`);
 			} else if (stream) {
 				appendEventLog("linger", "stream_complete");

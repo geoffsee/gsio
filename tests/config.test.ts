@@ -11,6 +11,9 @@ describe("config module", () => {
 		await withTempCwd(async () => {
 			const cfg = await loadConfig();
 			expect(cfg.ai.provider).toBe("openai");
+			expect(cfg.ai.models.reasoning).toBe("o4-mini");
+			expect(cfg.ai.models.guidance).toBe("gpt-4o");
+			expect(cfg.ai.models.execution).toBe("gpt-4o-mini");
 			expect(cfg.panel.maxItems).toBe(5);
 			expect(cfg.tools.requireApproval).toContain("shell_exec");
 			expect(cfg.linger.enabled).toBe(false);
@@ -57,6 +60,9 @@ describe("config module", () => {
 			const cfg = await loadConfig();
 			expect(cfg.ai.provider).toBe("ollama");
 			expect(cfg.ai.model).toBe("llama3.1:8b");
+			expect(cfg.ai.models.execution).toBe("llama3.1:8b");
+			expect(cfg.ai.models.reasoning).toBe("llama3.1:8b");
+			expect(cfg.ai.models.guidance).toBe("llama3.1:8b");
 			expect(cfg.ai.baseUrl).toBe("http://localhost:11434");
 			expect(cfg.panel.maxItems).toBe(20);
 			expect(cfg.audio.whisper.command).toBe("whisper-cpp");
@@ -74,7 +80,17 @@ describe("config module", () => {
 	it("persists normalized values when saving configuration", async () => {
 		await withTempCwd(async () => {
 			const cfg: AppConfig = {
-				ai: { provider: "openai", model: "  ", baseUrl: "", apiKey: "" },
+				ai: {
+					provider: "openai",
+					model: "  ",
+					baseUrl: "",
+					apiKey: "",
+					models: {
+						reasoning: " ",
+						guidance: "",
+						execution: " ",
+					},
+				},
 				shell: { allowDangerous: true, extraAllowlist: ["ls", ""] },
 				panel: { todoShowCompleted: false, maxItems: 0 },
 				audio: {
@@ -114,6 +130,9 @@ describe("config module", () => {
 			expect(stored.memory.maxEntries).toBe(50);
 			expect(stored.memory.userId).toBe("person");
 			expect(stored.linger.minIntervalSec).toBe(600);
+			expect(stored.ai.models.reasoning).toBe("o4-mini");
+			expect(stored.ai.models.guidance).toBe("gpt-4o");
+			expect(stored.ai.models.execution).toBe("gpt-4o-mini");
 		}, "gsio-config-");
 	});
 });

@@ -88,7 +88,7 @@ flowchart LR
 
 ## Model Surfaces & Integrations
 
-- **LLM Provider (`src/llm.ts`)** – Switches between OpenAI’s Responses API and an Ollama-compatible chat completions endpoint. The configured default model (`.gsio-config.json → ai.model`) is propagated via `OPENAI_DEFAULT_MODEL`.
+- **LLM Provider (`src/llm.ts`)** – Switches between OpenAI’s Responses API and an Ollama-compatible chat completions endpoint. The planning/guidance/execution trio (`.gsio-config.json → ai.models.{reasoning,guidance,execution}`) governs the multi-pass workflow, and the execution model is propagated via `OPENAI_DEFAULT_MODEL`.
 - **Vision extraction (`readFileTool` in `src/tools.ts`)** – Attempts Pandoc conversion first; for binary or image-heavy assets it invokes an OpenAI Vision-compatible model using `VISION_EXTRACTION_PROMPT`, returning structured text to the agent.
 - **Audio STT (`src/audio.ts`)** – Supports three tiers: OpenAI-hosted transcription models (default `gpt-4o-transcribe`), MLX Omni Server for Apple Silicon/on-device inference, and a lightweight Whisper CLI integration. Whisper support is intentionally slim—choose MLX or OpenAI when you need robust, multi-language coverage.
 - **Audio summariser (`src/summarizer.ts`)** – Reuses the main chat model to keep a rolling summary of recent transcripts, respecting provider/base URL overrides.

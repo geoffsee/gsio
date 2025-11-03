@@ -5,8 +5,8 @@ import { setOpenAIAPI, setDefaultOpenAIKey } from "@openai/agents-openai";
 export async function configureLLM(): Promise<void> {
 	const cfg = await loadConfig();
 	const provider = cfg.ai?.provider ?? "openai";
-	const model =
-		(cfg.ai?.model ?? "").trim() ||
+	const executionModel =
+		(cfg.ai?.models?.execution ?? cfg.ai?.model ?? "").trim() ||
 		(provider === "ollama" ? "llama3.1:8b" : "gpt-4o-mini");
 	const baseUrl =
 		(cfg.ai?.baseUrl ?? "").trim() ||
@@ -14,7 +14,7 @@ export async function configureLLM(): Promise<void> {
 	const apiKey = (cfg.ai?.apiKey ?? "").trim();
 
 	// Ensure downstream code sees envs consistently (summarizer/audio use OpenAI client directly)
-	if (model) process.env["OPENAI_DEFAULT_MODEL"] = model;
+	if (executionModel) process.env["OPENAI_DEFAULT_MODEL"] = executionModel;
 
 	if (provider === "ollama") {
 		// Chat Completions mode works with Ollama's OpenAI-compatible endpoint

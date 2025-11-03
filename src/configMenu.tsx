@@ -2,11 +2,37 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, Newline, useApp, useInput } from "ink";
 import { loadConfig, saveConfig, type AppConfig } from "./config.js";
 
+type ReasoningEffort = AppConfig["loops"]["reasoning"]["effort"];
+type ReasoningSummary = AppConfig["loops"]["reasoning"]["summary"];
+type ThinkingVerbosity = AppConfig["loops"]["thinking"]["verbosity"];
+
+const REASONING_EFFORT_OPTIONS: readonly ReasoningEffort[] = [
+	"minimal",
+	"low",
+	"medium",
+	"high",
+] as const;
+
+const REASONING_SUMMARY_OPTIONS: readonly ReasoningSummary[] = [
+	"auto",
+	"concise",
+	"detailed",
+] as const;
+
+const THINKING_VERBOSITY_OPTIONS: readonly ThinkingVerbosity[] = [
+	"low",
+	"medium",
+	"high",
+] as const;
+
 type Mode =
 	| "browse"
 	| "editAllow"
 	| "editBehavior"
 	| "editModel"
+	| "editReasoningModel"
+	| "editGuidanceModel"
+	| "editExecutionModel"
 	| "editBaseUrl"
 	| "editWhisperCmd"
 	| "editWhisperModel"
@@ -44,6 +70,9 @@ export const ConfigMenu = () => {
 			mode === "editAllow" ||
 			mode === "editBehavior" ||
 			mode === "editModel" ||
+			mode === "editReasoningModel" ||
+			mode === "editGuidanceModel" ||
+			mode === "editExecutionModel" ||
 			mode === "editBaseUrl" ||
 			mode === "editWhisperCmd" ||
 			mode === "editWhisperModel" ||
@@ -56,6 +85,12 @@ export const ConfigMenu = () => {
 				setInput("");
 				setMode("browse");
 				if (val.length > 0) {
+					const currentModels =
+						cfg.ai.models ?? {
+							reasoning: cfg.ai.model || "",
+							guidance: cfg.ai.model || "",
+							execution: cfg.ai.model || "",
+						};
 					if (mode === "editAllow") {
 						const next = {
 							...cfg,
@@ -69,7 +104,42 @@ export const ConfigMenu = () => {
 						const next = { ...cfg, linger: { ...cfg.linger, behavior: val } };
 						setCfg(next);
 					} else if (mode === "editModel") {
-						const next = { ...cfg, ai: { ...cfg.ai, model: val } };
+						const next = {
+							...cfg,
+							ai: {
+								...cfg.ai,
+								model: val,
+								models: { ...currentModels, execution: val },
+							},
+						};
+						setCfg(next);
+					} else if (mode === "editReasoningModel") {
+						const next = {
+							...cfg,
+							ai: {
+								...cfg.ai,
+								models: { ...currentModels, reasoning: val },
+							},
+						};
+						setCfg(next);
+					} else if (mode === "editGuidanceModel") {
+						const next = {
+							...cfg,
+							ai: {
+								...cfg.ai,
+								models: { ...currentModels, guidance: val },
+							},
+						};
+						setCfg(next);
+					} else if (mode === "editExecutionModel") {
+						const next = {
+							...cfg,
+							ai: {
+								...cfg.ai,
+								models: { ...currentModels, execution: val },
+								model: val,
+							},
+						};
 						setCfg(next);
 					} else if (mode === "editBaseUrl") {
 						const next = { ...cfg, ai: { ...cfg.ai, baseUrl: val } };
@@ -264,6 +334,30 @@ export const ConfigMenu = () => {
 					<Text color="yellow">Edit AI model: {input}_</Text>
 				</>
 			)}
+			{mode === "editReasoningModel" && (
+				<>
+					<Newline />
+					<Text color="yellow">
+						Edit planning (reasoning) model: {input}_
+					</Text>
+				</>
+			)}
+			{mode === "editGuidanceModel" && (
+				<>
+					<Newline />
+					<Text color="yellow">
+						Edit implementation guidance model: {input}_
+					</Text>
+				</>
+			)}
+			{mode === "editExecutionModel" && (
+				<>
+					<Newline />
+					<Text color="yellow">
+						Edit execution model: {input}_
+					</Text>
+				</>
+			)}
 			{mode === "editBaseUrl" && (
 				<>
 					<Newline />
@@ -310,6 +404,11 @@ export const ConfigMenu = () => {
 	);
 
 	function buildItems(c: AppConfig) {
+		const models = c.ai.models ?? {
+			reasoning: c.ai.model,
+			guidance: c.ai.model,
+			execution: c.ai.model,
+		};
 		const out: any[] = [];
 		out.push({
 			key: "ai.provider",
@@ -334,6 +433,33 @@ export const ConfigMenu = () => {
 			kind: "action",
 		});
 		out.push({
+			key: "ai.models.reasoning",
+			label: `Planning model (reasoning): ${models.reasoning}`,
+			action: () => {
+				setMode("editReasoningModel");
+				setInput(models.reasoning);
+			},
+			kind: "action",
+		});
+		out.push({
+			key: "ai.models.guidance",
+			label: `Guidance model (large): ${models.guidance}`,
+			action: () => {
+				setMode("editGuidanceModel");
+				setInput(models.guidance);
+			},
+			kind: "action",
+		});
+		out.push({
+			key: "ai.models.execution",
+			label: `Execution model (small): ${models.execution}`,
+			action: () => {
+				setMode("editExecutionModel");
+				setInput(models.execution);
+			},
+			kind: "action",
+		});
+		out.push({
 			key: "ai.baseUrl",
 			label: `AI base URL: ${c.ai.baseUrl || "(default)"}`,
 			action: () => {
@@ -345,6 +471,130 @@ export const ConfigMenu = () => {
 			},
 			kind: "action",
 		});
+		out.push({
+			key: "loops.reasoning.effort",
+			label: `Reasoning loop effort: ${c.loops.reasoning.effort}`,
+			inc: () =>
+				setCfg({
+					...c,
+					loops: {
+						...c.loops,
+						reasoning: {
+							...c.loops.reasoning,
+							effort: cycleOption(
+								REASONING_EFFORT_OPTIONS,
+								c.loops.reasoning.effort,
+								1
+							),
+						},
+					},
+				}),
+			dec: () =>
+				setCfg({
+					...c,
+					loops: {
+						...c.loops,
+						reasoning: {
+							...c.loops.reasoning,
+							effort: cycleOption(
+								REASONING_EFFORT_OPTIONS,
+								c.loops.reasoning.effort,
+								-1
+							),
+						},
+					},
+				}),
+			kind: "number",
+		});
+		out.push({
+			key: "loops.reasoning.summary",
+			label: `Reasoning summary: ${c.loops.reasoning.summary}`,
+			inc: () =>
+				setCfg({
+					...c,
+					loops: {
+						...c.loops,
+						reasoning: {
+							...c.loops.reasoning,
+							summary: cycleOption(
+								REASONING_SUMMARY_OPTIONS,
+								c.loops.reasoning.summary,
+								1
+							),
+						},
+					},
+				}),
+			dec: () =>
+				setCfg({
+					...c,
+					loops: {
+						...c.loops,
+						reasoning: {
+							...c.loops.reasoning,
+							summary: cycleOption(
+								REASONING_SUMMARY_OPTIONS,
+								c.loops.reasoning.summary,
+								-1
+							),
+						},
+					},
+				}),
+			kind: "number",
+		});
+		out.push({
+			key: "loops.thinking.enabled",
+			label: "Thinking loop: enable deeper reflection",
+			value: c.loops.thinking.enabled,
+			toggle: () =>
+				setCfg({
+					...c,
+					loops: {
+						...c.loops,
+						thinking: {
+							...c.loops.thinking,
+							enabled: !c.loops.thinking.enabled,
+						},
+					},
+				}),
+			kind: "toggle",
+		});
+		if (c.loops.thinking.enabled) {
+			out.push({
+				key: "loops.thinking.verbosity",
+				label: `Thinking verbosity: ${c.loops.thinking.verbosity}`,
+				inc: () =>
+					setCfg({
+						...c,
+						loops: {
+							...c.loops,
+							thinking: {
+								...c.loops.thinking,
+								verbosity: cycleOption(
+									THINKING_VERBOSITY_OPTIONS,
+									c.loops.thinking.verbosity,
+									1
+								),
+							},
+						},
+					}),
+				dec: () =>
+					setCfg({
+						...c,
+						loops: {
+							...c.loops,
+							thinking: {
+								...c.loops.thinking,
+								verbosity: cycleOption(
+									THINKING_VERBOSITY_OPTIONS,
+									c.loops.thinking.verbosity,
+									-1
+								),
+							},
+						},
+					}),
+				kind: "number",
+			});
+		}
 		out.push({
 			key: "dangerous",
 			label: "Shell: allow dangerous commands",
@@ -556,4 +806,11 @@ function renderItem(it: any) {
 function truncate(s: string, n: number) {
 	if (s.length <= n) return s;
 	return s.slice(0, n - 1) + "…";
+}
+
+function cycleOption<T>(values: readonly T[], current: T, delta: 1 | -1): T {
+	const idx = values.indexOf(current);
+	if (idx === -1) return values[0];
+	const next = (idx + delta + values.length) % values.length;
+	return values[next];
 }
