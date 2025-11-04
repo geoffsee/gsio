@@ -791,6 +791,86 @@ async function runCommand(
 	});
 }
 
+// --- File system write tools (safe, within CWD) ---
+
+export const mkdirpTool = tool({
+	name: "mkdirp",
+	description:
+		"Create a directory (and all parents) relative to the current working directory.",
+	parameters: z.object({ path: z.string().min(1) }),
+	needsApproval: needsApprovalFor("mkdirp"),
+	async execute({ path: dirPath }) {
+		const abs = path.resolve(process.cwd(), dirPath);
+		if (!withinCwd(abs)) {
+			throw new Error("Path must be within the working directory");
+		}
+		await fs.mkdir(abs, { recursive: true });
+		return `Created directory: ${path.relative(process.cwd(), abs)}`;
+	},
+});
+
+export const writeFileTool = tool({
+	name: "write_file",
+	description:
+		"Write a UTF-8 text file. Creates parent directories if needed. Provide full content; use append_file to append.",
+	parameters: z.object({
+		path: z.string().min(1),
+		content: z.string().default(""),
+		overwrite: z.boolean().default(true),
+		maxBytes: z.number().int().positive().max(2_000_000).default(500_000),
+	}),
+	needsApproval: needsApprovalFor("write_file"),
+	async execute({ path: filePath, content, overwrite, maxBytes }) {
+		const abs = path.resolve(process.cwd(), filePath);
+		if (!withinCwd(abs)) {
+			throw new Error("Path must be within the working directory");
+		}
+		const enc = new TextEncoder();
+		const bytes = enc.encode(content ?? "");
+		if (bytes.byteLength > maxBytes) {
+			throw new Error(`Content too large: ${bytes.byteLength} bytes (max ${maxBytes}).`);
+		}
+		try {
+			const st = await fs.stat(abs);
+			if (st.isDirectory()) throw new Error("Target path is a directory");
+			if (!overwrite) throw new Error("File exists and overwrite=false");
+		} catch {}
+		await fs.mkdir(path.dirname(abs), { recursive: true });
+		await fs.writeFile(abs, bytes);
+		return `Wrote ${bytes.byteLength} bytes to ${path.relative(process.cwd(), abs)}`;
+	},
+});
+
+export const appendFileTool = tool({
+	name: "append_file",
+	description: "Append UTF-8 text to a file; creates file and parents if needed.",
+	parameters: z.object({
+		path: z.string().min(1),
+		content: z.string().min(1),
+		maxBytes: z.number().int().positive().max(2_000_000).default(500_000),
+	}),
+	needsApproval: needsApprovalFor("append_file"),
+	async execute({ path: filePath, content, maxBytes }) {
+		const abs = path.resolve(process.cwd(), filePath);
+		if (!withinCwd(abs)) {
+			throw new Error("Path must be within the working directory");
+		}
+		const enc = new TextEncoder();
+		const bytes = enc.encode(content);
+		if (bytes.byteLength > maxBytes) {
+			throw new Error(`Content too large: ${bytes.byteLength} bytes (max ${maxBytes}).`);
+		}
+		await fs.mkdir(path.dirname(abs), { recursive: true });
+		await fs.appendFile(abs, bytes);
+		return `Appended ${bytes.byteLength} bytes to ${path.relative(process.cwd(), abs)}`;
+	},
+});
+
+// register new tools
+(defaultTools as any[]).push(mkdirpTool as any);
+(defaultTools as any[]).push(writeFileTool as any);
+(defaultTools as any[]).push(appendFileTool as any);
+
 export const shellExecTool = tool({
 	name: "shell_exec",
 	description:

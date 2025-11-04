@@ -21,6 +21,7 @@ export interface RecallOptions {
   topK?: number;
   minSimilarity?: number;
   includeRecent?: boolean;
+  userId?: string;
 }
 
 export interface MemoryConfig {

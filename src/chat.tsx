@@ -648,6 +648,7 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					topK: 3,
 					minSimilarity: 0.3,
 					maxTokens: 600,
+					userId: memoryUserIdRef.current,
 				});
 				if (!recall || recall.trim().length === 0) {
 					return { prompt, memoryContext: null };
@@ -886,26 +887,75 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		) => {
 			const live = options?.live ?? true;
 			let full = "";
+			let hadDelta = false;
 			for await (const event of stream) {
 				logStreamEvent(source, event);
+				// Case 1: Raw model delta events (primary streaming path)
 				if (
 					event.type === "raw_model_stream_event" &&
 					event.data?.type === "output_text_delta"
 				) {
 					const delta = event.data.delta;
 					if (delta) {
+						hadDelta = true;
 						full += delta;
 						options?.onUpdate?.(full);
 						if (live) setResponse(full);
 					}
+				// Case 2: Legacy/simple delta shape
 				} else if (
 					(event as any).type === "output_text_delta" &&
 					(event as any).delta
 				) {
+					hadDelta = true;
 					const delta = (event as any).delta as string;
 					full += delta;
 					options?.onUpdate?.(full);
 					if (live) setResponse(full);
+				// Case 3: Agent item events – message output created (non-delta)
+				} else if (
+					event.type === "run_item_stream_event" &&
+					(event as any).name === "message_output_created"
+				) {
+					if (!hadDelta) {
+						const raw = (event as any)?.item?.rawItem;
+						const parts = Array.isArray(raw?.content) ? raw.content : [];
+						let text = "";
+						for (const part of parts) {
+							if (part && part.type === "output_text" && typeof part.text === "string") {
+								text += part.text;
+							}
+						}
+						if (text) {
+							full += text;
+							options?.onUpdate?.(full);
+							if (live) setResponse(full);
+						}
+					}
+				// Case 4: Response completed – extract any final text if no deltas arrived
+				} else if (
+					event.type === "raw_model_stream_event" &&
+					event.data?.type === "response_done"
+				) {
+					if (!hadDelta && (!full || full.trim().length === 0)) {
+						const out = (event as any)?.data?.response?.output;
+						if (Array.isArray(out)) {
+							let text = "";
+							for (const item of out) {
+								const content = Array.isArray(item?.content) ? item.content : [];
+								for (const part of content) {
+									if (part && part.type === "output_text" && typeof part.text === "string") {
+										text += part.text;
+									}
+								}
+							}
+							if (text) {
+								full += text;
+								options?.onUpdate?.(full);
+								if (live) setResponse(full);
+							}
+						}
+					}
 				}
 			}
 			return full;

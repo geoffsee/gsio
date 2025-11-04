@@ -50,7 +50,7 @@ export default class LLMMemory {
     const query = this.messagesToText(currentMessages.slice(-2));
     const queryEmbedding = await this.generateEmbedding(query);
 
-    const userId = this.extractUserId(currentMessages);
+    const userId = options.userId ?? this.extractUserId(currentMessages);
     if (!userId) return '';
 
     const entries = await this.getAllEntries(userId);
