@@ -7,6 +7,7 @@ type ReasoningSummary = AppConfig["loops"]["reasoning"]["summary"];
 type ThinkingVerbosity = AppConfig["loops"]["thinking"]["verbosity"];
 
 const REASONING_EFFORT_OPTIONS: readonly ReasoningEffort[] = [
+	"auto",
 	"minimal",
 	"low",
 	"medium",

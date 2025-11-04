@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+type ReasoningEffort = "auto" | "minimal" | "low" | "medium" | "high";
 type ReasoningSummary = "auto" | "concise" | "detailed";
 type ThinkingVerbosity = "low" | "medium" | "high";
 
@@ -121,6 +121,7 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+	"auto",
 	"minimal",
 	"low",
 	"medium",

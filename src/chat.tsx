@@ -67,6 +67,70 @@ type PromptContext = {
 	memoryContext: string | null;
 };
 
+// Heuristics for automatic reasoning scaling
+function estimateTaskComplexity(history: Message[], prompt: string): number {
+	const text = [history.slice(-4).map((m) => m.content).join("\n\n"), prompt]
+		.filter(Boolean)
+		.join("\n\n");
+	let score = 0;
+	const len = text.length;
+	if (len > 400) score += 1;
+	if (len > 1200) score += 1;
+	if (len > 3000) score += 1;
+	// Code indicators
+	const codeBlocks = (text.match(/```[\s\S]*?```/g) || []).length;
+	if (codeBlocks >= 1) score += 1;
+	if (codeBlocks >= 2) score += 1;
+	if (/\b(refactor|architecture|migrate|schema|deploy|docker|k8s|kubernetes|database|index|optimi[sz]e|performance|latency|throughput|concurrency|race|deadlock|security|auth|oauth|jwt|encryption)\b/i.test(text))
+		score += 2;
+	if (/\b(test|unit test|integration test|coverage|mock|stub)\b/i.test(text)) score += 1;
+	if (/\bplan|steps|roadmap|milestone|phases|design doc\b/i.test(text)) score += 1;
+	if (/\bmultiple files|across files|cross-cutting|end-to-end\b/i.test(text)) score += 1;
+	const listItems = (text.match(/^\s*(?:\d+\.|[-*])\s+/gm) || []).length;
+	if (listItems >= 3) score += 1;
+	if (listItems >= 6) score += 1;
+	// Question complexity cues
+	const questions = (text.match(/\?/g) || []).length;
+	if (questions >= 2) score += 1;
+	// Clamp and return
+	return Math.max(0, Math.min(8, score));
+}
+
+function mapComplexityToEffort(score: number): Exclude<ReasoningEffort, "auto"> {
+	if (score >= 6) return "high";
+	if (score >= 4) return "medium";
+	if (score >= 2) return "low";
+	return "minimal";
+}
+
+function mapEffortToSummary(effort: Exclude<ReasoningEffort, "auto">): Exclude<ReasoningSummary, "auto"> {
+	return effort === "high" || effort === "medium" ? "detailed" : "concise";
+}
+
+function computeEffectiveReasoning(
+	history: Message[],
+	prompt: string,
+	effortSetting: ReasoningEffort,
+	summarySetting: ReasoningSummary
+): {
+	effort: Exclude<ReasoningEffort, "auto">;
+	summary: Exclude<ReasoningSummary, "auto">;
+	score: number;
+	autoEffort: boolean;
+	autoSummary: boolean;
+} {
+	const score = estimateTaskComplexity(history, prompt);
+	const autoEffort = effortSetting === "auto";
+	const autoSummary = summarySetting === "auto";
+	const eff = autoEffort
+		? mapComplexityToEffort(score)
+		: (effortSetting as Exclude<ReasoningEffort, "auto">);
+	const sum = autoSummary
+		? mapEffortToSummary(eff)
+		: (summarySetting as Exclude<ReasoningSummary, "auto">);
+	return { effort: eff, summary: sum, score, autoEffort, autoSummary };
+}
+
 function buildSocraticReasoningSummary(args: {
 	userPrompt: string;
 	planText: string;
@@ -177,7 +241,8 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		PendingInterruption[]
 	>([]);
 	const [pendingIndex, setPendingIndex] = useState<number>(0);
-	const stopAudioRef = React.useRef<null | (() => void)>(null);
+ const stopAudioRef = React.useRef<null | (() => void)>(null);
+ 	const lastTurnExecutionAgentRef = React.useRef<Agent | null>(null);
 	const [lingerEnabled, setLingerEnabled] = useState<boolean>(false);
 	const [lingerBehavior, setLingerBehavior] = useState<string>("");
 	const [lingerIntervalSec, setLingerIntervalSec] = useState<number>(20);
@@ -210,7 +275,56 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		allowReasoningSummaryRef.current = allowReasoningSummary;
 	}, [allowReasoningSummary]);
 
-	const planningAgent = React.useMemo(() => {
+ // Build a per-turn planning agent with optional auto-scaled reasoning settings
+ function buildPlanningAgentForTurn(
+ 	effortEffective: Exclude<ReasoningEffort, "auto">,
+ 	summaryEffective: Exclude<ReasoningSummary, "auto">
+ ) {
+ 	const audioLine = audioEnabled
+ 		? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
+ 		: "";
+ 	const memoryLine = memoryEnabled
+ 		? `Long-term memory is available; prioritize consistency with recalled context. Embedding model: ${memoryEmbeddingModel}.`
+ 		: "";
+ 	const summaryLine = audioSummary
+ 		? `Recent audio context summary: ${audioSummary}`
+ 		: "";
+ 	const modelSettings: ModelSettings = { toolChoice: "none" };
+ 	const includeReasoningSettings =
+ 		allowReasoningSummary && reasoningModel.startsWith("o4");
+ 	if (includeReasoningSettings) {
+ 		modelSettings.reasoning = {
+ 			effort: effortEffective,
+ 			summary: summaryEffective,
+ 		};
+ 	}
+ 	if (thinkingEnabled) {
+ 		modelSettings.text = { verbosity: thinkingVerbosity };
+ 	}
+ 	const instructions = [
+ 		"You are the planning specialist. Break down the latest user request into a concise, numbered plan before any work begins.",
+ 		"Capture dependencies, data that must be gathered, and TODO updates when relevant. Do not execute tasks or modify files—only plan.",
+ 		allowReasoningSummary
+ 			? ""
+ 			: "Reasoning summaries are currently disabled; produce a clear plan without them.",
+ 		audioLine,
+ 		memoryLine,
+ 		summaryLine,
+ 		...TODO_TOOL_INSTRUCTIONS,
+ 	]
+ 		.filter(Boolean)
+ 		.join("\n");
+ 	const modelChoice = allowReasoningSummary ? reasoningModel : guidanceModel;
+ 	return new Agent({
+ 		name: "Planner",
+ 		instructions,
+ 		tools: defaultTools,
+ 		model: modelChoice,
+ 		modelSettings,
+ 	});
+ }
+
+ const planningAgent = React.useMemo(() => {
 		const audioLine = audioEnabled
 			? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
 			: "";
@@ -309,7 +423,62 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		guidanceModel,
 	]);
 
-	const executionAgent = React.useMemo(() => {
+ // Build a per-turn execution agent with optional auto-scaled reasoning settings
+ function buildExecutionAgentForTurn(
+ 	effortEffective: Exclude<ReasoningEffort, "auto">,
+ 	summaryEffective: Exclude<ReasoningSummary, "auto">
+ ) {
+ 	const audioLine = audioEnabled
+ 		? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
+ 		: "";
+ 	const memoryLine = memoryEnabled
+ 		? `Long-term memory is available; prioritize consistency with recalled context. Embedding model: ${memoryEmbeddingModel}.`
+ 		: "";
+ 	const summaryLine = audioSummary ? `Recent audio context summary: ${audioSummary}` : "";
+ 	const includeReasoningSettings =
+ 		allowReasoningSummary && executionModel.startsWith("o4");
+ 	const reasoningLine = includeReasoningSettings
+ 		? `Reasoning loop is mandatory (effort: ${effortEffective}, summary: ${summaryEffective}). Run a structured reasoning pass before finalizing answers.`
+ 		: "Use deliberate internal reflection to check your work before finalizing; external reasoning summaries are not available.";
+ 	const thinkingLine = thinkingEnabled
+ 		? `Thinking loop is enabled (verbosity: ${thinkingVerbosity}). When tasks are complex or ambiguous, take an additional thinking pass before responding.`
+ 		: "Thinking loop is disabled unless deeper reflection is explicitly requested.";
+ 	const planReminder =
+ 		"Before responding, review the most recent plan and implementation guidance produced earlier in this turn. Follow them unless there is a compelling reason to adjust (and explain any adjustments).";
+ 	const instructions = [
+ 		"You are a helpful assistant. Use tools when helpful. Prefer concise answers.",
+ 		planReminder,
+ 		"Use the TODO tools to navigate multi-step tasks: create a plan, set priorities, track status (todo/in_progress/blocked/done), mark focus, and add notes. Keep the list updated as you work.",
+ 		reasoningLine,
+ 		thinkingLine,
+ 		allowReasoningSummary ? "" : "Reasoning summaries are temporarily disabled; continue executing without them.",
+ 		audioLine,
+ 		memoryLine,
+ 		summaryLine,
+ 		...TODO_TOOL_INSTRUCTIONS,
+ 	]
+ 		.filter(Boolean)
+ 		.join("\n");
+ 	const modelSettings: ModelSettings = {};
+ 	if (includeReasoningSettings) {
+ 		modelSettings.reasoning = {
+ 			effort: effortEffective,
+ 			summary: summaryEffective,
+ 		};
+ 	}
+ 	if (thinkingEnabled) {
+ 		modelSettings.text = { verbosity: thinkingVerbosity };
+ 	}
+ 	return new Agent({
+ 		name: "Assistant",
+ 		instructions,
+ 		tools: defaultTools,
+ 		model: executionModel,
+ 		modelSettings,
+ 	});
+ }
+
+ const executionAgent = React.useMemo(() => {
 		const audioLine = audioEnabled
 			? "Audio context capture is enabled; prefer incorporating relevant auditory information if provided."
 			: "";
@@ -785,7 +954,8 @@ export const Chat = ({ debug = false }: ChatProps) => {
 			const runOptions = { stream: true as const, maxTurns: 30 };
 			let retryWithoutSummary = false;
 				try {
-			stream = await run(executionAgent, state, runOptions);
+			const agentForResume = lastTurnExecutionAgentRef.current ?? executionAgent;
+			stream = await run(agentForResume, state, runOptions);
 			const full = await consumeStream(stream, source);
 			if (isReasoningAccessError(full)) {
 				const err = new Error(full);
@@ -1266,6 +1436,20 @@ export const Chat = ({ debug = false }: ChatProps) => {
 		let workingHistory: Message[] = [...chatHistory];
 		const userPrompt = chatHistory[chatHistory.length - 1]?.content || "";
 
+		// Compute per-turn effective reasoning settings (may be auto)
+		const effSel = computeEffectiveReasoning(
+			workingHistory,
+			userPrompt,
+			reasoningEffort,
+			reasoningSummary
+		);
+		if (effSel.autoEffort || effSel.autoSummary) {
+			appendEventLog(
+				"chat",
+				`auto_reasoning_selected effort=${effSel.effort} summary=${effSel.summary} score=${effSel.score}`
+			);
+		}
+
 		try {
 			if (!allowReasoningSummaryRef.current) {
 				const internalNotice: Message = {
@@ -1280,8 +1464,13 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					userPrompt,
 					"chat"
 				);
+				const perTurnExec = buildExecutionAgentForTurn(
+					effSel.effort,
+					effSel.summary
+				);
+				lastTurnExecutionAgentRef.current = perTurnExec;
 				executionStream = await run(
-					executionAgent,
+					perTurnExec,
 					executionInput.inputItems,
 					runOptions
 				);
@@ -1308,7 +1497,8 @@ export const Chat = ({ debug = false }: ChatProps) => {
 
 			// Planning phase (reasoning model)
 			const planInput = await buildRunInput(workingHistory, userPrompt, "chat");
-			planningStream = await run(planningAgent, planInput.inputItems, runOptions);
+			const planningAgentForTurn = buildPlanningAgentForTurn(effSel.effort, effSel.summary);
+			planningStream = await run(planningAgentForTurn, planInput.inputItems, runOptions);
 			let planText = await consumeStream(planningStream, "chat", {
 				live: false,
 			});
@@ -1407,15 +1597,20 @@ export const Chat = ({ debug = false }: ChatProps) => {
 				// Execution phase (small model)
 				const executionInput = await buildRunInput(
 					workingHistory,
-				userPrompt,
-				"chat"
-			);
-			executionStream = await run(
-				executionAgent,
-				executionInput.inputItems,
-				runOptions
-			);
-			const fullResponse = await consumeStream(executionStream, "chat");
+					userPrompt,
+					"chat"
+				);
+				const perTurnExec = buildExecutionAgentForTurn(
+					effSel.effort,
+					effSel.summary
+				);
+				lastTurnExecutionAgentRef.current = perTurnExec;
+				executionStream = await run(
+					perTurnExec,
+					executionInput.inputItems,
+					runOptions
+				);
+				const fullResponse = await consumeStream(executionStream, "chat");
 			if (isReasoningAccessError(fullResponse)) {
 				const err = new Error(fullResponse);
 				if (handleReasoningSummaryError(err, "chat")) {
@@ -1624,14 +1819,32 @@ export const Chat = ({ debug = false }: ChatProps) => {
 
 		let stream: StreamedRunResult<any, any> | null = null;
 		let retryWithoutSummary = false;
-			const runOptions = { stream: true as const, maxTurns: 30 };
-			try {
+		const runOptions = { stream: true as const, maxTurns: 30 };
+		try {
 			const { inputItems } = await buildRunInput(
 				newMessages,
 				instruction,
 				"linger"
 			);
-			stream = await run(executionAgent, inputItems, runOptions);
+			// Compute per-turn effective settings and build agent
+			const effSel = computeEffectiveReasoning(
+				newMessages,
+				instruction,
+				reasoningEffort,
+				reasoningSummary
+			);
+			if (effSel.autoEffort || effSel.autoSummary) {
+				appendEventLog(
+					"linger",
+					`auto_reasoning_selected effort=${effSel.effort} summary=${effSel.summary} score=${effSel.score}`
+				);
+			}
+			const perTurnExec = buildExecutionAgentForTurn(
+				effSel.effort,
+				effSel.summary
+			);
+			lastTurnExecutionAgentRef.current = perTurnExec;
+			stream = await run(perTurnExec, inputItems, runOptions);
 			const full = await consumeStream(stream, "linger");
 			if (isReasoningAccessError(full)) {
 				const err = new Error(full);
