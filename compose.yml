@@ -1,0 +1,15 @@
+services:
+  gsio:
+    image: ghcr.io/geoffsee/gsio:0.2.9-alpha-alpine
+    container_name: gsio
+    restart: unless-stopped
+    tty: true
+    volumes:
+      - gsio-data:/data
+    env_file:
+      - .env.secrets
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+volumes:
+  gsio-data:

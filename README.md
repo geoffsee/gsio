@@ -3,19 +3,96 @@
 ![Tests](https://github.com/geoffsee/gsio/actions/workflows/tests.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-BYO Mechatronics
+**Embrace Chaos** - *BYO Mechatronics*
+
+> Expect breaking changes! Early release under active development. If something isn't working, try stepping back a version. e.g `bunx gsio@0.1.10 <optional-subcommand>`
 
 ![gsio.png](gsio.png)
 
-> Under active development. Expect breaking changes. If something isn't working, try stepping back a version. e.g `bunx gsio@0.1.10 <optional-subcommand>`
+
+> Little to no thought was put into aesthetics because nobody cares what it looks like if it doesn't work well.
+> On a related note, *I have a vision*, of piping stdout to the display of Rayban Wayfarer glasses.
+
 
 ## Install
 
+You can either run this as a CLI, with full access to your system, or as a container for stronger isolation from the host.
 ```bash
 $ npx gsio chat
 ```
 
 
+## Run with Docker
+
+You can run `gsio` in a container without installing Node/Bun locally. The container image is published to GitHub Container Registry.
+
+- Registry image: `ghcr.io/geoffsee/gsio:latest-alpine`
+
+### Quick start (one-off run)
+
+This starts an interactive session and uses your current directory to store `.gsio-config.json` and any local data so it persists on your machine:
+
+```bash
+# macOS/Linux
+OPENAI_API_KEY=sk-... \
+  docker run --rm -it \
+  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -v "$(pwd):/your-proj-dir" -w /workspace \
+  ghcr.io/geoffsee/gsio:latest-alpine
+```
+
+Tips:
+- Use `-v "$(pwd):/workspace" -w /workspace` so config and data live in your project folder (or any folder you choose).
+- You can pass other environment variables the same way with `-e NAME=value`.
+
+### With Docker-managed volume (isolated data)
+
+If you prefer Docker to manage the data volume instead of binding your host folder, use a named volume mounted at `/data`:
+
+```bash
+docker volume create gsio-data
+OPENAI_API_KEY=sk-... \
+  docker run --rm -it \
+  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -v gsio-data:/data \
+  ghcr.io/geoffsee/gsio:latest-alpine
+```
+
+Note: By default `gsio` stores `.gsio-config.json` in the current working directory. When using the `/data` volume, you can `cd /data` after the container starts, or mount a working directory with `-w /data` to keep config inside the volume.
+
+### Using Docker Compose
+
+A ready-to-use `compose.yml` is included.
+
+1. Create a file named `.env.secrets` next to `compose.yml` with your API key:
+   ```env
+   OPENAI_API_KEY=sk-...
+   ```
+2. Start an interactive session via Compose:
+   ```bash
+   docker compose run --rm -it gsio
+   ```
+   This will use the image tag referenced in `compose.yml` and mount a Docker-managed volume named `gsio-data` at `/data`.
+
+If you prefer a long-running container, you can do:
+```bash
+docker compose up -d
+# then attach an interactive shell and start the CLI
+docker exec -it gsio ./cli.js
+```
+
+### Build the image locally (optional)
+
+If you want to build the image yourself (multi-arch) and tag `latest-alpine`:
+
+```bash
+# requires docker buildx and jq
+npm run container:build
+# push (optional)
+npm run container:push
+```
+
+The build uses the `Containerfile` and produces tags like `<version>-<hash>-alpine` and `latest-alpine`.
 
 ## CLI
 
