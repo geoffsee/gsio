@@ -1,0 +1,58 @@
+{
+  "name": "@gsio/mst-models",
+  "version": "1.0.0",
+  "description": "MobX-State-Tree models for GSIO AI application",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun test --coverage",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mobx",
+    "mobx-state-tree",
+    "state-management",
+    "gsio"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "mobx": "^6.13.5",
+    "mobx-state-tree": "^6.0.1",
+    "uuid": "^11.0.4",
+    "zod": "^3.24.1",
+    "@openai/agents": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.2",
+    "@types/uuid": "^10.0.0",
+    "bun-types": "^1.1.38",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "mobx-react-lite": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "mobx-react-lite": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
+}

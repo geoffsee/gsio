@@ -11,3 +11,4 @@ notes.txt
 vendored
 .gsio-memory/
 src/*.js
+/.env.secrets

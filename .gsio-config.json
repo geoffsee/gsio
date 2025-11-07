@@ -1,61 +1,41 @@
 {
-  "ai": {
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "baseUrl": "",
-    "apiKey": "",
-    "models": {
-      "reasoning": "o4-mini",
-      "guidance": "gpt-4o",
-      "execution": "gpt-4o-mini"
-    }
-  },
-  "shell": {
-    "allowDangerous": true,
-    "extraAllowlist": []
-  },
-  "panel": {
-    "todoShowCompleted": true,
-    "maxItems": 5
-  },
-  "audio": {
-    "captureEnabled": false,
-    "sttProvider": "openai",
-    "whisper": {
-      "command": "whisper-cpp",
-      "model": "",
-      "language": "en",
-      "extraArgs": []
-    },
-    "openaiTranscribeModel": "gpt-4o-transcribe",
-    "openaiBaseUrl": "",
-    "openaiApiKey": ""
-  },
-  "linger": {
-    "enabled": false,
-    "behavior": "When useful, infer what the user is doing from recent audio and take helpful actions: add/update TODOs, set focus/status/priority, or fetch information. Keep changes minimal and safe. Respond concisely only when it adds value.",
-    "minIntervalSec": 20
-  },
-  "tools": {
-    "requireApproval": [
-      "shell_exec"
-    ]
-  },
-  "memory": {
-    "enabled": true,
-    "userId": "local_user",
-    "maxEntries": 500,
-    "storageDir": ".gsio-memory",
-    "embeddingModel": "text-embedding-3-small"
-  },
-  "loops": {
-    "reasoning": {
-      "effort": "medium",
-      "summary": "concise"
-    },
-    "thinking": {
-      "enabled": true,
-      "verbosity": "medium"
-    }
-  }
+	"ai": {
+		"provider": "ollama",
+		"model": "granite3.3:8b",
+		"baseUrl": "http://localhost:11434",
+		"apiKey": ""
+	},
+	"shell": {
+		"allowDangerous": false,
+		"extraAllowlist": []
+	},
+	"panel": {
+		"todoShowCompleted": true,
+		"maxItems": 5
+	},
+	"audio": {
+		"captureEnabled": false,
+		"sttProvider": "openai",
+		"whisper": {
+			"command": "",
+			"model": "",
+			"language": "en",
+			"extraArgs": []
+		},
+		"openaiTranscribeModel": "mlx-community/whisper-large-v3-turbo",
+		"openaiBaseUrl": "http://localhost:10240/v1",
+		"openaiApiKey": "not-needed"
+	},
+	"linger": {
+		"enabled": false,
+		"behavior": "When useful, infer what the user is doing from recent audio and take helpful actions: add/update TODOs, set focus/status/priority, or fetch information. Keep changes minimal and safe. Respond concisely only when it adds value.",
+		"minIntervalSec": 20
+	},
+	"memory": {
+		"enabled": true,
+		"userId": "offline_user",
+		"maxEntries": 500,
+		"storageDir": ".gsio-memory",
+		"embeddingModel": "ollama embeddinggemma"
+	}
 }

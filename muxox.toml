@@ -1,0 +1,16 @@
+[[service]]
+name = "agent"
+cmd = "bunx gsio chat"
+cwd = "./"
+log_capacity = 5000
+
+[[service]]
+name = "ollama"
+cmd = "ollama serve"
+cwd = "./"
+
+
+[[service]]
+name = "mlx-omni-server"
+cmd = "scripts/start-mlx-omni-server.sh"
+cwd = "./"

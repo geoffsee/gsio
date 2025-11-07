@@ -19,6 +19,7 @@
 	"scripts": {
 		"build": "rm -rf ./dist && bun ./build.ts",
 		"dev": "bun run build && node dist/cli.js",
+		"start": "muxox",
 		"prepublishOnly": "bun run build",
 		"container:tty": "docker run -it -v \"$(pwd):/app\" --workdir /app  oven/bun:alpine sh",
 		"container:build": "scripts/build-container.sh",
