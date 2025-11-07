@@ -20,6 +20,13 @@
 		"build": "rm -rf ./dist && bun ./build.ts",
 		"dev": "bun run build && node dist/cli.js",
 		"prepublishOnly": "bun run build",
+		"release": "release-it",
+		"release:dry": "release-it --dry-run",
+		"release:alpha": "release-it --preRelease=alpha",
+		"release:beta": "release-it --preRelease=beta",
+		"release:patch": "release-it patch",
+		"release:minor": "release-it minor",
+		"release:major": "release-it major",
 		"container:tty": "docker run -it -v \"$(pwd):/app\" --workdir /app  oven/bun:alpine sh",
 		"container:build": "scripts/build-container.sh",
 		"container:push": "docker push ghcr.io/geoffsee/gsio:latest-alpine"
@@ -29,6 +36,7 @@
 	],
 	"devDependencies": {
 		"@openai/agents": "^0.2.1",
+		"@release-it/conventional-changelog": "^10.0.1",
 		"@types/react": "^18.0.32",
 		"chalk": "^5.2.0",
 		"ink": "^4.1.0",
@@ -39,6 +47,7 @@
 		"prettier": "^2.8.7",
 		"react": "^18.2.0",
 		"react-devtools-core": "^7.0.1",
+		"release-it": "^19.0.6",
 		"ts-node": "^10.9.1",
 		"typescript": "^5.0.3",
 		"yoga-wasm-web": "^0.3.3"

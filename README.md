@@ -111,11 +111,14 @@ $ gsio --help
   Options
     --name  Optional greeting name (shown at the top)
     --debug Enable input debugging (logs key info)
+    --config, -c  Path to config file or directory (defaults to ./.gsio-config.json)
 
   Examples
     $ gsio
     $ gsio config
     $ gsio --debug
+    $ gsio --config /path/to/custom-config.json
+    $ gsio -c /some/dir   # uses /some/dir/.gsio-config.json
     $ OPENAI_API_KEY=sk-... gsio
 ```
 

@@ -142,8 +142,23 @@ const THINKING_VERBOSITIES: readonly ThinkingVerbosity[] = [
 
 const FILE_NAME = ".gsio-config.json";
 
+// Optional override for config file path, set by CLI flag
+let CONFIG_FILE_OVERRIDE: string | undefined;
+
+export function setConfigPathOverride(p: string) {
+  const abs = path.resolve(p);
+  // If a directory is provided, use default filename inside it
+  CONFIG_FILE_OVERRIDE = path.extname(abs) ? abs : path.join(abs, FILE_NAME);
+}
+
 export function getConfigPath(cwd = process.cwd()) {
-	return path.resolve(cwd, FILE_NAME);
+    if (CONFIG_FILE_OVERRIDE) return CONFIG_FILE_OVERRIDE;
+    const env = process.env["GSIO_CONFIG"] || process.env["GSIO_CONFIG_PATH"];
+    if (env && env.trim().length > 0) {
+        const abs = path.resolve(env);
+        return path.extname(abs) ? abs : path.join(abs, FILE_NAME);
+    }
+    return path.resolve(cwd, FILE_NAME);
 }
 
 export async function loadConfig(): Promise<AppConfig> {
@@ -161,9 +176,10 @@ export async function loadConfig(): Promise<AppConfig> {
 }
 
 export async function saveConfig(cfg: AppConfig): Promise<void> {
-	const file = getConfigPath();
-	const data = JSON.stringify(normalizeConfig(cfg), null, 2);
-	await fs.writeFile(file, data, "utf8");
+    const file = getConfigPath();
+    const data = JSON.stringify(normalizeConfig(cfg), null, 2);
+    await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => {});
+    await fs.writeFile(file, data, "utf8");
 }
 
 function normalizeConfig(input: any): AppConfig {
