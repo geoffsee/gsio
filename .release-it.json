@@ -20,7 +20,6 @@
     "skipChecks": false
   },
   "hooks": {
-    "before:init": ["bun test"],
     "after:bump": "bun run build",
     "before:release": "bun run build"
   },

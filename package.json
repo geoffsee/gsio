@@ -21,6 +21,7 @@
 		"dev": "bun run build && node dist/cli.js",
 		"prepublishOnly": "bun run build",
 		"release": "release-it",
+		"release-it": "bun test && release-it",
 		"release:dry": "release-it --dry-run",
 		"release:alpha": "release-it --preRelease=alpha",
 		"release:beta": "release-it --preRelease=beta",

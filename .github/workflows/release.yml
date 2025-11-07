@@ -32,12 +32,25 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run tests
+        run: bun test
+
+      - name: Ensure clean working tree
+        run: |
+          echo "Dirty files before clean (if any):"
+          git status --porcelain || true
+          # Reset any tracked changes and remove untracked files/dirs (keeps ignored like node_modules)
+          git reset --hard
+          git clean -fd
+          echo "After cleanup:"
+          git status --porcelain || true
 
       - name: Release
         run: bun run release --ci --increment=${{ github.event.inputs.release-type }}
