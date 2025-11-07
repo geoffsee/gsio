@@ -29,7 +29,7 @@
   "devDependencies": {
     "typescript": "^5.7.2",
     "vite": "^5.4.12",
-    "vitest": "^3.2.4"
+    "vitest": "^4.0.8"
   },
   "description": "High-performance LLM memory system with intermediate representation for token efficiency",
   "keywords": [
