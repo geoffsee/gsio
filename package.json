@@ -4,7 +4,8 @@
 	"license": "MIT",
 	"bin": "dist/cli.js",
 	"workspaces": [
-		"packages/llm-memory"
+		"packages/llm-memory",
+		"packages/llm-memory-mst"
 	],
 	"type": "module",
 	"engines": {
@@ -13,6 +14,7 @@
 	"dependencies": {
 		"@openai/agents-openai": "^0.2.1",
 		"llm-memory": "./packages/llm-memory",
+		"llm-memory-mst": "./packages/llm-memory-mst",
 		"unstorage": "^1.17.1",
 		"zod": "3"
 	},

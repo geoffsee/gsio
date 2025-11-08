@@ -8,6 +8,10 @@ configure it, and what to expect while using the agent.
 
 GSIO wraps a custom `llm-memory` package which is a high-level abstraction over the
 `unstorage`-backed adapter.
+For projects that need richer instrumentation or prefer observable state, there is also
+an MST-based reference implementation in `packages/llm-memory-mst` that models the
+same behavior with explicit state machines, making it easier to inspect what the
+memory subsystem is doing at runtime.
 Unstorage is a node API that allows for interfacing many storage backends via KV interface, allowing this to be executed in various environments with different constraints, regulatory or otherwise. For instance, for a healthcare usecase, you might use a specific type of cloud storage to remain HIPAA-compliant, which you can target by modifying the storage driver from FS to whatever you need. With minimal changes, any data source can be supported by creating an adapter class for the persistence backend (Postgres, MySQL, DuckDB). By using the native unstorage driver, we eliminate all external runtime dependencies and instead only rely on the filesystem. Unstorage handles the rest.
 This means we can effectively run this anywhere with a node runtime with zero config.
 

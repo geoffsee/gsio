@@ -1502,15 +1502,49 @@ export const Chat = ({ debug = false }: ChatProps) => {
 
 		try {
 			if (!allowReasoningSummaryRef.current) {
-				const internalNotice: Message = {
+				// Reasoning summaries are unavailable. Instead of hiding thinking,
+				// generate a concise fallback plan and brief reasoning using available models.
+				const notice: Message = {
 					role: "assistant",
 					content:
-						"(Internal reasoning: executing without shared summaries…) ",
+						"(Reasoning summaries unavailable — sharing a concise plan instead.)",
 				};
-				const interimHistory = [...chatHistory, internalNotice];
-				setMessages(interimHistory);
+				workingHistory = [...chatHistory, notice];
+				setMessages(workingHistory);
+
+				// Build a short plan using the guidance agent if available, otherwise execution agent
+				const fallbackPlanPrompt =
+					"Briefly outline a short, numbered plan (3–5 steps) to address the user's latest request above. Keep it concise.";
+				const planHistory = [
+					...workingHistory,
+					{ role: "user" as const, content: fallbackPlanPrompt },
+				];
+				const planInput = await buildRunInput(planHistory, fallbackPlanPrompt, "chat");
+				const planningAgentForTurn = guidanceAgent ?? buildExecutionAgentForTurn(
+					effSel.effort,
+					effSel.summary
+				);
+				const planningStream = await run(planningAgentForTurn, planInput.inputItems, runOptions);
+				let planText = await consumeStream(planningStream, "chat", { live: false });
+				planText = (planText ?? "").trim();
+				if (planText) {
+					workingHistory = [
+						...workingHistory,
+						{ role: "assistant", content: `Plan (fallback):\n${planText}` },
+					];
+					setMessages(workingHistory);
+				}
+
+				// Provide a brief reasoning line so the user can follow along
+				const reasoningLine = planText
+					? "Reasoning (fallback): I will follow the plan above and validate each step."
+					: "Reasoning (fallback): I’ll proceed cautiously and validate each step.";
+				workingHistory = [...workingHistory, { role: "assistant", content: reasoningLine }];
+				setMessages(workingHistory);
+
+				// Proceed to execution as usual
 				const executionInput = await buildRunInput(
-					interimHistory,
+					workingHistory,
 					userPrompt,
 					"chat"
 				);
@@ -1525,22 +1559,16 @@ export const Chat = ({ debug = false }: ChatProps) => {
 					runOptions
 				);
 				const fullResponse = await consumeStream(executionStream, "chat");
-				const assistantContent =
-					(fullResponse ?? "").trim().length > 0 ? fullResponse : "";
+				const assistantContent = (fullResponse ?? "").trim() || "(no response)";
 				const displayMessages: Message[] = [
-					...interimHistory,
-					{
-						role: "assistant",
-						content: assistantContent || "(no response)",
-					},
+					...workingHistory,
+					{ role: "assistant", content: assistantContent },
 				];
 				setMessages(displayMessages);
-				if (assistantContent) {
-					await memorizeExchange(displayMessages, "chat");
-				}
+				await memorizeExchange(displayMessages, "chat").catch(() => {});
 				appendEventLog(
 					"chat",
-					"reasoning_plan_skipped (summaries unavailable)"
+					"reasoning_polyfill_used (summaries unavailable)"
 				);
 				return;
 			}

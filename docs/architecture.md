@@ -111,6 +111,7 @@ flowchart LR
 | `src/audio.ts` | Handles continuous capture, VAD segmentation, STT provider selection, and error/metrics reporting. |
 | `src/summarizer.ts` | Uses the configured model/provider to maintain a rolling natural-language summary of recent audio context. |
 | `packages/llm-memory` | Provides a deterministic embedding + summarisation layer over Unstorage, enabling low-latency recall across sessions. |
+| `packages/llm-memory-mst` | Mirrors the memory behavior with MobX State Tree models for observability, debugging, and experimentation. |
 | `src/configMenu.tsx` | Ink UI for mutating configuration without leaving the terminal. |
 | `src/markdown.tsx` | Converts streaming Markdown into styled Ink primitives for display in the chat window. |
 
