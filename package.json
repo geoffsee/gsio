@@ -16,7 +16,7 @@
 		"llm-memory": "./packages/llm-memory",
 		"llm-memory-mst": "./packages/llm-memory-mst",
 		"unstorage": "^1.17.1",
-		"zod": "3"
+		"zod": "4"
 	},
 	"scripts": {
 		"build": "rm -rf ./dist && bun ./build.ts",
