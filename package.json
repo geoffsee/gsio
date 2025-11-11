@@ -44,7 +44,7 @@
 		"chalk": "^5.2.0",
 		"ink": "^4.1.0",
 		"ink-testing-library": "^4.0.0",
-		"marked": "^16.4.1",
+		"marked": "^17.0.0",
 		"meow": "^14.0.0",
 		"mobx-state-tree": "^7.0.2",
 		"openai": "^6.6.0",
