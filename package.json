@@ -12,7 +12,7 @@
 		"node": ">=16"
 	},
 	"dependencies": {
-		"@openai/agents-openai": "^0.2.1",
+		"@openai/agents-openai": "^0.3.0",
 		"llm-memory": "./packages/llm-memory",
 		"llm-memory-mst": "./packages/llm-memory-mst",
 		"unstorage": "^1.17.1",
